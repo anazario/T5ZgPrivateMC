@@ -8,6 +8,7 @@ executed inside the container that matches the release (cmssw-el7 / cmssw-el8).
     ./tmc.py setup                         # cmsrel the 5 releases, install fragments, scram b
     ./tmc.py configs [SAMPLE ...]          # cmsDriver -> work/<sample>/ (all samples by default)
     ./tmc.py test SAMPLE [-n 40]           # run the whole chain locally on n LHE events
+    ./tmc.py jobtest SAMPLE [-n 40]        # run job/run_chain.sh as a CRAB worker node would
     ./tmc.py check FILE CHAIN              # compare MiniAOD provenance with the expected PSetIDs
     ./tmc.py submit [SAMPLE ...] [--dryrun]
     ./tmc.py status [SAMPLE ...]
@@ -25,7 +26,9 @@ import time
 
 import production as P
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+# Physical path: at the LPC ~/nobackup is a symlink chain into /uscms_data/dN, which the
+# cmssw-elX containers don't mount by default, so ROOT is bound into every container (run_in).
+ROOT = os.path.dirname(os.path.realpath(__file__))
 RELEASES = os.path.join(ROOT, "releases")
 WORK = os.path.join(ROOT, "work")
 CONTAINER = {"el8": "cmssw-el8", "slc7": "cmssw-el7"}
@@ -50,7 +53,7 @@ def run_in(release, arch, commands, cwd, env_release=True, log=None):
         f.write("\n".join(lines) + "\n")
     try:
         out = open(log, "w") if log else None
-        rc = subprocess.run([container_for(arch), "--", "bash", script], cwd=cwd,
+        rc = subprocess.run([container_for(arch), "-B", ROOT, "--", "bash", script], cwd=cwd,
                             stdout=out, stderr=subprocess.STDOUT if out else None).returncode
         if out:
             out.close()
@@ -229,6 +232,46 @@ def cmd_test(args):
     cmd_check(argparse.Namespace(file=os.path.join(t, "MiniAOD.root"), chain=chain))
 
 
+def cmd_jobtest(args):
+    """Run job/run_chain.sh as a CRAB worker node would: only the shipped files, in a fresh
+    directory, starting from the GEN release's environment (the CRAB sandbox).  Releases of later
+    steps are set up from CVMFS inside the job, so this tests the release switching."""
+    (name, chain, point, ct, era), = select([args.sample])
+    d = os.path.join(WORK, name)
+    if not os.path.exists(os.path.join(d, "chain.txt")):
+        sys.exit("run ./tmc.py configs first")
+    t = os.path.join(d, "jobtest")
+    shutil.rmtree(t, ignore_errors=True)
+    os.makedirs(t)
+    files = step_files(chain)
+    # CRAB turns psetName into PSet.py and sets the per-job event count
+    with open(os.path.join(d, files[0][1])) as f:
+        pset = f.read()
+    pset += f"\nprocess.maxEvents.input = cms.untracked.int32({args.n})\n"
+    pset += "if hasattr(process, 'externalLHEProducer'):\n"
+    pset += f"    process.externalLHEProducer.nEvents = cms.untracked.uint32({args.n})\n"
+    with open(os.path.join(t, "PSet.py"), "w") as f:
+        f.write(pset)
+    for fname in ["chain.txt", "run_chain.sh"] + [cfg for n, cfg, i, o in files[1:]]:
+        shutil.copy(os.path.join(d, fname), t)
+    rel, arch = gen_release(chain)
+    log = os.path.join(t, "job.log")
+    print(f"running run_chain.sh in {t} (sandbox release {rel}); log: {log}")
+    t0 = time.time()
+    rc = run_in(rel, arch, ["bash run_chain.sh 1"], t, log=log)
+    print(f"run_chain.sh exit {rc} after {time.time() - t0:.0f} s")
+    for line in open(log, errors="replace"):
+        if line.startswith("=== step") and ("exit" in line):
+            print("  " + line.strip())
+    leftover = sorted(f for f in os.listdir(t) if f.endswith(".root") and f != "MiniAOD.root")
+    print("leftover intermediate files:", leftover or "none")
+    if rc:
+        sys.exit(f"job failed, see {log}")
+    s = P.CHAINS[chain]["steps"][-1]
+    print(f"{args.n} LHE events -> {events_in(t, 'MiniAOD.root', s)} MiniAOD events")
+    cmd_check(argparse.Namespace(file=os.path.join(t, "MiniAOD.root"), chain=chain))
+
+
 def events_in(cwd, fname, s):
     out = os.path.join(cwd, ".nevents")
     run_in(s["release"], s["arch"], [f"edmFileUtil {fname} > {out} 2>&1 || true"], cwd)
@@ -284,6 +327,8 @@ def main():
     p = sub.add_parser("configs"); p.add_argument("samples", nargs="*"); p.set_defaults(f=cmd_configs)
     p = sub.add_parser("test"); p.add_argument("sample"); p.add_argument("-n", type=int, default=40)
     p.set_defaults(f=cmd_test)
+    p = sub.add_parser("jobtest"); p.add_argument("sample"); p.add_argument("-n", type=int, default=40)
+    p.set_defaults(f=cmd_jobtest)
     p = sub.add_parser("check"); p.add_argument("file"); p.add_argument("chain", choices=list(P.CHAINS))
     p.set_defaults(f=cmd_check)
     p = sub.add_parser("submit"); p.add_argument("samples", nargs="*"); p.add_argument("--dryrun", action="store_true")
