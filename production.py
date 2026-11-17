@@ -70,7 +70,7 @@ CHAINS = {
         "tag": "FullMini",
         "events_per_job": 800,      # LHE events requested; ~28% survive MLM matching
         "total_events": 300000,     # -> 375 jobs, ~83k events, as the existing samples
-        "max_memory_mb": 3000,
+        "max_memory_mb": 4000,      # local test: premix DIGI+HLT step peaks at 3.0 GB
         "whitelist": ["T2_*", "T3_*"],
         "steps": [
             step(R2022_GEN,

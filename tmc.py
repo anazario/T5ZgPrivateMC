@@ -216,7 +216,10 @@ def cmd_test(args):
         t0 = time.time()
         rc = run_in(s["release"], s["arch"], [f"cmsRun -j fjr_step{n}.xml {cfg}"], t, log=log)
         dt = time.time() - t0
-        rss = re.findall(r"Peak rss size\s*([\d.]+)", open(log, errors="replace").read())
+        fjr = os.path.join(t, f"fjr_step{n}.xml")
+        rss = re.findall(r'Name="PeakValueRss" Value="([\d.]+)"',
+                         open(fjr, errors="replace").read() if os.path.exists(fjr) else "")
+        rss = [f"{float(r):.0f}" for r in rss]
         size = os.path.getsize(os.path.join(t, outfile)) if os.path.exists(os.path.join(t, outfile)) else 0
         report.append((n, s["release"], rc, dt, rss[-1] if rss else "?", size))
         print(f"step {n} {s['release']:22s} rc={rc} {dt:7.0f} s  peak RSS {rss[-1] if rss else '?'} MB  "
