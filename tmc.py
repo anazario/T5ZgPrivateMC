@@ -10,8 +10,9 @@ executed inside the container that matches the release (cmssw-el7 / cmssw-el8).
     ./tmc.py test SAMPLE [-n 40]           # run the whole chain locally on n LHE events
     ./tmc.py jobtest SAMPLE [-n 40]        # run job/run_chain.sh as a CRAB worker node would
     ./tmc.py check FILE CHAIN              # compare MiniAOD provenance with the expected PSetIDs
-    ./tmc.py submit [SAMPLE ...] [--dryrun]
-    ./tmc.py status [SAMPLE ...]
+    ./tmc.py submit [SAMPLE ...] [--dryrun] [--pilot N]   # --pilot N: only N jobs, separate task
+    ./tmc.py proceed [SAMPLE ...] [--pilot]   # submit a task that was uploaded with --dryrun
+    ./tmc.py status [SAMPLE ...] [--pilot]
 
 SAMPLE may be a full sample name or any unique substring of it.
 """
@@ -170,13 +171,24 @@ def cmd_configs(args):
         write_crab_config(d, name, chain, point, ct, era)
 
 
-def write_crab_config(d, name, chain, point, ct, era):
+def request_name(name, pilot):
+    return f"{name}_{P.VERSION}" + ("_pilot" if pilot else "")
+
+
+def crab_config_name(pilot):
+    return "crabConfig_pilot.py" if pilot else "crabConfig.py"
+
+
+def write_crab_config(d, name, chain, point, ct, era, pilot=0):
+    """pilot=N: only N jobs, under a separate request name and output dataset tag."""
     c = P.CHAINS[chain]
     cfgs = [cfg for n, cfg, i, o in step_files(chain)]
+    total = pilot * c["events_per_job"] if pilot else c["total_events"]
+    tag = f"{c['tag']}_{P.VERSION}" + ("_pilot" if pilot else "")
     text = f"""from CRABClient.UserUtilities import config
 config = config()
 
-config.General.requestName = '{name}_{P.VERSION}'
+config.General.requestName = '{request_name(name, pilot)}'
 config.General.workArea = 'crab_projects'
 config.General.transferOutputs = True
 config.General.transferLogs = False
@@ -194,15 +206,15 @@ config.JobType.maxJobRuntimeMin = 2000
 config.Data.outputPrimaryDataset = '{P.sample_name(point, ct, era)}'
 config.Data.splitting = 'EventBased'
 config.Data.unitsPerJob = {c['events_per_job']}
-config.Data.totalUnits = {c['total_events']}
+config.Data.totalUnits = {total}
 config.Data.publication = False
-config.Data.outputDatasetTag = '{c['tag']}_{P.VERSION}'
+config.Data.outputDatasetTag = '{tag}'
 config.Data.outLFNDirBase = '{P.OUT_LFN_BASE}'
 
 config.Site.storageSite = '{P.STORAGE_SITE}'
 config.Site.whitelist = {c['whitelist']!r}
 """
-    with open(os.path.join(d, "crabConfig.py"), "w") as f:
+    with open(os.path.join(d, crab_config_name(pilot)), "w") as f:
         f.write(text)
 
 
@@ -324,12 +336,26 @@ def crab_in_env(samples, crab_cmd):
 
 
 def cmd_submit(args):
-    extra = " --dryrun" if args.dryrun else ""
-    crab_in_env(args.samples, lambda d, name: f"crab submit -c crabConfig.py{extra}")
+    # --dryrun: CRAB uploads the sandbox and splits the task but submits nothing; it waits for
+    # `./tmc.py proceed`.  The local estimate run is skipped: tmc.py test/jobtest already did it.
+    extra = " --dryrun --skip-estimates" if args.dryrun else ""
+    for s in select(args.samples):
+        name, chain, point, ct, era = s
+        d = os.path.join(WORK, name)
+        if not os.path.exists(os.path.join(d, "chain.txt")):
+            sys.exit(f"{name}: run ./tmc.py configs first")
+        write_crab_config(d, name, chain, point, ct, era, pilot=args.pilot)
+    crab_in_env(args.samples, lambda d, name: f"crab submit -c {crab_config_name(args.pilot)}{extra}")
+
+
+def cmd_proceed(args):
+    crab_in_env(args.samples,
+                lambda d, name: f"crab proceed -d crab_projects/crab_{request_name(name, args.pilot)}")
 
 
 def cmd_status(args):
-    crab_in_env(args.samples, lambda d, name: f"crab status -d crab_projects/crab_{name}_{P.VERSION}")
+    crab_in_env(args.samples,
+                lambda d, name: f"crab status -d crab_projects/crab_{request_name(name, args.pilot)}")
 
 
 def main():
@@ -345,8 +371,12 @@ def main():
     p = sub.add_parser("check"); p.add_argument("file"); p.add_argument("chain", choices=list(P.CHAINS))
     p.set_defaults(f=cmd_check)
     p = sub.add_parser("submit"); p.add_argument("samples", nargs="*"); p.add_argument("--dryrun", action="store_true")
+    p.add_argument("--pilot", type=int, default=0, metavar="N", help="submit only N jobs as a separate pilot task")
     p.set_defaults(f=cmd_submit)
-    p = sub.add_parser("status"); p.add_argument("samples", nargs="*"); p.set_defaults(f=cmd_status)
+    for cmd, f in (("proceed", cmd_proceed), ("status", cmd_status)):
+        p = sub.add_parser(cmd); p.add_argument("samples", nargs="*")
+        p.add_argument("--pilot", action="store_true", help="the pilot task instead of the full one")
+        p.set_defaults(f=f)
     args = ap.parse_args()
     args.f(args)
 
