@@ -130,9 +130,19 @@ def cmd_setup(args):
         with open(os.path.join(d, P.fragment_name(point, ct, era) + ".py"), "w") as f:
             f.write(fragment_text(point, ct, era))
         built.add((rel, arch))
+    # The fragments use run_generic_tarball_xrootd.sh, which 10_6_X releases don't ship.  Add it
+    # (janguian's copy, as used for the existing 2018 samples) next to the release's own
+    # run_generic_tarball_cvmfs.sh, which it sources from its own directory.  CRAB ships src/*/*/data.
+    lhe = "GeneratorInterface/LHEInterface/data"
+    add_script = (
+        f"if [ ! -e $CMSSW_RELEASE_BASE/src/{lhe}/run_generic_tarball_xrootd.sh ]; then"
+        f" mkdir -p $CMSSW_BASE/src/{lhe}"
+        f" && cp {ROOT}/genscripts/run_generic_tarball_xrootd.sh $CMSSW_BASE/src/{lhe}/"
+        f" && cp $CMSSW_RELEASE_BASE/src/{lhe}/run_generic_tarball_cvmfs.sh $CMSSW_BASE/src/{lhe}/"
+        f" && echo '   added run_generic_tarball_xrootd.sh'; fi")
     for rel, arch in sorted(built):
         print(f"{rel}: scram b")
-        if run_in(rel, arch, ["scram b -j 8 > scram_build.log 2>&1 || (tail -20 scram_build.log; exit 1)"],
+        if run_in(rel, arch, [add_script, "scram b -j 8 > scram_build.log 2>&1 || (tail -20 scram_build.log; exit 1)"],
                   os.path.join(RELEASES, rel, "src")):
             sys.exit(f"scram b failed in {rel}")
     print("setup done")
