@@ -108,7 +108,10 @@ CHAINS = {
         "tag": "FastMini",
         "events_per_job": 1600,     # FastSim is ~10x cheaper; fewer, longer jobs
         "total_events": 300000,
-        "max_memory_mb": 3000,
+        # prmon, 1 thread: FastSim+premix cmsRun alone 3.6 GB; gridpack systematics while cmsRun
+        # waits 4.1 GB.  The 3000 MB single-core pilot was killed (50660).  2 cores allow 5000 MB.
+        "threads": 2,
+        "max_memory_mb": 5000,
         # PUlib1 is read from cmseos: keep jobs on US sites
         "whitelist": ["T2_US_*", "T3_US_FNALLPC"],
         "steps": [
