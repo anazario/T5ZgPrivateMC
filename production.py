@@ -108,10 +108,11 @@ CHAINS = {
         "tag": "FastMini",
         "events_per_job": 1600,     # FastSim is ~10x cheaper; fewer, longer jobs
         "total_events": 300000,
-        # prmon, 1 thread: FastSim+premix cmsRun alone 3.6 GB; gridpack systematics while cmsRun
-        # waits 4.1 GB.  The 3000 MB single-core pilot was killed (50660).  2 cores allow 5000 MB.
-        "threads": 2,
-        "max_memory_mb": 5000,
+        # prmon (whole job, 40 events): 1 thread 3.6-4.1 GB, 2 threads 5.1 GB; each extra thread
+        # adds ~1.5 GB while CRAB grants 2.5 GB per core.  The 3000 MB single-core pilot was killed
+        # (50660).  4 cores = 10000 MB, the CRAB maximum for 4 cores; expected peak ~8 GB.
+        "threads": 4,
+        "max_memory_mb": 10000,
         # PUlib1 is read from cmseos: keep jobs on US sites
         "whitelist": ["T2_US_*", "T3_US_FNALLPC"],
         "steps": [
