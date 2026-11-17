@@ -159,6 +159,8 @@ def cmd_configs(args):
         for (n, cfg, infile, outfile), s in zip(step_files(chain), c["steps"]):
             a = s["args"].format(frag=P.fragment_name(point, ct, era))
             a += f" --python_filename {cfg} --fileout file:{outfile} --no_exec"
+            if c.get("threads", 1) > 1:
+                a += f" --nThreads {c['threads']}"
             a += " -n 10" if n == 1 else f" --filein file:{infile} -n -1"
             log = os.path.join(d, f"cmsDriver_step{n}.log")
             if run_in(s["release"], s["arch"], ["cmsDriver.py " + a], d, log=log):
@@ -200,6 +202,7 @@ config.JobType.inputFiles = {['chain.txt'] + cfgs[1:]!r}
 config.JobType.outputFiles = ['MiniAOD.root']
 config.JobType.disableAutomaticOutputCollection = True
 config.JobType.allowUndistributedCMSSW = True
+config.JobType.numCores = {c.get('threads', 1)}
 config.JobType.maxMemoryMB = {c['max_memory_mb']}
 config.JobType.maxJobRuntimeMin = 2000
 
@@ -287,7 +290,13 @@ def cmd_jobtest(args):
     print(f"run_chain.sh exit {rc} after {time.time() - t0:.0f} s")
     for line in open(log, errors="replace"):
         if line.startswith("=== step") and ("exit" in line):
-            print("  " + line.strip())
+            n = line.split()[2]
+            fjr = os.path.join(t, "FrameworkJobReport.xml" if n == "1" else f"fjr_step{n}.xml")
+            text = open(fjr, errors="replace").read() if os.path.exists(fjr) else ""
+            rss = re.findall(r'Name="PeakValueRss" Value="([\d.]+)"', text)
+            thr = re.findall(r'Name="NumberOfThreads" Value="(\d+)"', text)
+            print(f"  {line.strip()}  peak RSS {float(rss[-1]):.0f} MB" if rss else f"  {line.strip()}",
+                  f"threads {thr[-1]}" if thr else "")
     leftover = sorted(f for f in os.listdir(t) if f.endswith(".root") and f != "MiniAOD.root")
     print("leftover intermediate files:", leftover or "none")
     if rc:

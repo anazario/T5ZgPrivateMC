@@ -10,7 +10,8 @@ Placeholders, filled per sample by tmc.py:
 """
 
 # --------------------------------------------------------------------------- output
-OUT_LFN_BASE = "/store/user/anazario/T5ZgPrivateMC"
+# CRAB requires the CERN username here; on cmseos /store/user/aabreuna is a link to .../anazario
+OUT_LFN_BASE = "/store/user/aabreuna/T5ZgPrivateMC"
 STORAGE_SITE = "T3_US_FNALLPC"
 VERSION = "v1"  # goes into the CRAB dataset tag; bump for a new production round
 
@@ -70,7 +71,10 @@ CHAINS = {
         "tag": "FullMini",
         "events_per_job": 800,      # LHE events requested; ~28% survive MLM matching
         "total_events": 300000,     # -> 375 jobs, ~83k events, as the existing samples
-        "max_memory_mb": 4000,      # local test: premix DIGI+HLT step peaks at 3.0 GB
+        # 1 thread: premix DIGI+HLT peaks at 3.0 GB, the CRAB single-core limit.  2 cores allow
+        # 5000 MB (2500/core).  numberOfThreads is untracked, so PSetIDs don't change.
+        "threads": 2,
+        "max_memory_mb": 5000,
         "whitelist": ["T2_*", "T3_*"],
         "steps": [
             step(R2022_GEN,
