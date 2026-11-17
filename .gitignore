@@ -1,0 +1,6 @@
+releases/
+work/
+crab_projects/
+__pycache__/
+*.pyc
+.tmc_*.sh
