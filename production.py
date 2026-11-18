@@ -8,6 +8,7 @@ difference is the 2022 FullSim PAT step, which no longer uses --fast (see README
 Placeholders, filled per sample by tmc.py:
   {frag}   fragment module name in Configuration/GenProduction/python (without .py)
 """
+import os
 
 # --------------------------------------------------------------------------- output
 # CRAB requires the CERN username here; on cmseos /store/user/aabreuna is a link to .../anazario
@@ -30,6 +31,8 @@ SAMPLES = (
     + [(HIGH_DM, 300, "2022", "2022_full")]
     # 2022 FastSim companions of all 2022 points
     + [(pt, ct, "2022", "2022_fast") for pt in (COMPRESSED, HIGH_DM) for ct in (0.1, 20, 300)]
+    # 2018 FastSim companions of all 2018 points
+    + [(pt, ct, "2018", "2018_fast") for pt in (COMPRESSED, HIGH_DM) for ct in (0.1, 20, 300)]
 )
 
 # --------------------------------------------------------------------------- inputs
@@ -50,6 +53,10 @@ PREMIX_2022_FAST = ",".join(
     f"root://cmseos.fnal.gov//store/user/janguian/FastSIM2022_PrePremix/PrePremix_PUlib1-{i}_2022/{stamp}/0000/"
     f"PPD-Run3Summer21PrePremix_sublib1-{i}_1.root" for i, stamp in _PULIB1
 )
+# Central UL18 FastSim premix library, restricted to files pinned on disk (most of it is tape
+# only); see the header of premix/UL18_FastSim_disk.txt.  LFNs: opened via the site config / AAA.
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "premix", "UL18_FastSim_disk.txt")) as _f:
+    PREMIX_2018_FAST = ",".join(l.strip() for l in _f if l.strip().startswith("/store/"))
 
 # --------------------------------------------------------------------------- chains
 # Each step: release, SCRAM arch, cmsDriver arguments.  Step N reads stepN-1.root and writes
@@ -59,6 +66,8 @@ R2022_PAT = ("CMSSW_13_0_13", "el8_amd64_gcc11")
 R2018_GEN = ("CMSSW_10_6_17_patch1", "slc7_amd64_gcc700")
 R2018_HLT = ("CMSSW_10_2_16_UL", "slc7_amd64_gcc700")
 R2018_PAT = ("CMSSW_10_6_27", "slc7_amd64_gcc700")
+R2018_FAST = ("CMSSW_10_6_35_patch1", "slc7_amd64_gcc700")    # central UL18 FastSim (SMS-T5Wg provenance)
+R2018_FASTPAT = ("CMSSW_10_6_29", "slc7_amd64_gcc700")
 
 MON = "--customise Configuration/DataProcessing/Utils.addMonitoring"
 
@@ -170,6 +179,34 @@ CHAINS = {
             "HLT": "b403a189a2d057e62e59ed092120c7f4",
             "RECO": "a5d501e738bc46974ac8d371aaff19e9",
             "PAT": "e2b541b9a2622f5ad47ca02585af3f7c",
+        },
+    },
+    # Releases, global tags, step list and PreMixingModule from the provenance of the central
+    # SMS-T5Wg RunIISummer20UL18 FastSim MiniAODv2; era/procModifiers are the standard UL18 FastSim
+    # recipe and are validated by the PAT PSetID below.
+    "2018_fast": {
+        "tag": "FastMini",
+        "events_per_job": 1600,
+        "total_events": 300000,
+        # placeholder, as 2022 FastSim; to be set from a prmon jobtest
+        "threads": 4,
+        "max_memory_mb": 10000,
+        # premix is read remotely (FNAL disk / CERN): keep jobs on US sites
+        "whitelist": ["T2_US_*", "T3_US_FNALLPC"],
+        "steps": [
+            step(R2018_FAST,
+                "Configuration/GenProduction/python/{frag}.py"
+                f" --pileup_input {PREMIX_2018_FAST} --mc --eventcontent AODSIM --fast --datatier AODSIM"
+                " --conditions 106X_upgrade2018_realistic_v16 --beamspot Realistic25ns13TeVEarly2018Collision"
+                " --step LHE,GEN,SIM,RECOBEFMIX,DIGI,DATAMIX,L1,DIGI2RAW,L1Reco,RECO --geometry DB:Extended"
+                " --datamix PreMix --era Run2_2018_FastSim --procModifiers premix_stage2 --runUnscheduled"),
+            step(R2018_FASTPAT,
+                "--eventcontent MINIAODSIM --fast " + MON + " --datatier MINIAODSIM"
+                " --conditions 106X_upgrade2018_realistic_v16_L1v1 --step PAT --procModifiers run2_miniAOD_UL"
+                " --geometry DB:Extended --era Run2_2018_FastSim --runUnscheduled --mc"),
+        ],
+        "expected_psetids": {
+            "PAT": "1d31bd42d1d45aa3ad7364946c5ce28f",   # central SMS-T5Wg UL18 FastSim MiniAODv2
         },
     },
 }

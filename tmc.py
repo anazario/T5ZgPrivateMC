@@ -5,7 +5,7 @@ Runs on a cmslpc-el9 login node with the standard library only.  Every CMSSW com
 executed inside the container that matches the release (cmssw-el7 / cmssw-el8).
 
     ./tmc.py list
-    ./tmc.py setup                         # cmsrel the 5 releases, install fragments, scram b
+    ./tmc.py setup                         # cmsrel the 7 releases, install fragments, scram b
     ./tmc.py configs [SAMPLE ...]          # cmsDriver -> work/<sample>/ (all samples by default)
     ./tmc.py test SAMPLE [-n 40]           # run the whole chain locally on n LHE events
     ./tmc.py jobtest SAMPLE [-n 40]        # run job/run_chain.sh as a CRAB worker node would
