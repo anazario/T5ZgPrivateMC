@@ -192,9 +192,11 @@ CHAINS = {
         "tag": "FastMini",
         "events_per_job": 1600,
         "total_events": 300000,
-        # placeholder, as 2022 FastSim; to be set from a prmon jobtest
+        # prmon (whole job, 40 events, 4 threads): peak 4.5 GB, half of 2022 FastSim.  The 2022
+        # FastSim pilot grew from 7.9 GB (jobtest) to 8.3 GB mid-job with 1600 events, so leave
+        # ~55% headroom.
         "threads": 4,
-        "max_memory_mb": 10000,
+        "max_memory_mb": 7000,
         # premix is read remotely (FNAL disk / CERN): keep jobs on US sites
         "whitelist": ["T2_US_*", "T3_US_FNALLPC"],
         "steps": [
