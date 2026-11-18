@@ -51,7 +51,7 @@ voms-proxy-init -voms cms -valid 192:00
 ./tmc.py setup                      # creates releases/ (7 releases), installs fragments, scram b
 ./tmc.py configs <sample>           # cmsDriver for every step -> work/<sample>/
 ./tmc.py test <sample> -n 40        # whole chain locally: time, memory, size, provenance check
-./tmc.py submit <sample> --dryrun   # CRAB dry run, then without --dryrun for a pilot
+./tmc.py submit <sample> [--pilot 5] --dryrun   # CRAB dry run; then ./tmc.py proceed <sample> [--pilot]
 ./tmc.py status [<sample> ...]
 ```
 
@@ -70,9 +70,35 @@ voms-proxy-init -voms cms -valid 192:00
 
 GEN/SIM IDs that contain the generator config differ by mass point and lifetime. That is expected.
 
-## Still to confirm in the CRAB pilot
+Physics checks on the MiniAOD (run in any python3 FWLite release, e.g. CMSSW_13_0_13):
 
-* Switching releases inside a job (`scram project` + `scram runtime` in `run_chain.sh`).
-* Step 1 writes `FrameworkJobReport.xml`, and `MiniAOD.root` is staged out as a non-EDM output file
-  (`disableAutomaticOutputCollection`).
-* Job length with 800 LHE events per job (FullSim) and 1600 (FastSim).
+* `validate/gencheck.py <files>`: 2 gluinos and 2 N2 per event, masses, gluino -> q qbar N2
+  flavours, N2 -> N1 γ / N1 Z at 50/50 (1:2:1 per event), Z decays vs PDG, and the N2 proper decay
+  length vs cτ. Masses and cτ are read from the file path.
+* `validate/pucheck.py <files from different jobs>`: the in-time pileup of event i must differ
+  between jobs.
+
+## How a CRAB job runs (`job/run_chain.sh`)
+
+* Step 1 is CRAB's `PSet.py`; CRAB sets its seeds, event count and lumi. The job log prints them.
+* Every later step gets fresh random seeds (`RandomNumberServiceHelper.populate()`), also printed.
+  Without this, steps 2+ ran with the fixed default seeds in every job, so premix DIGI overlaid the
+  same pileup on event i of every FullSim job. Seeds are untracked, so PSetIDs are unchanged.
+* Steps in other releases set their release up from CVMFS inside the job.
+* Step 1's outputs stay on the worker node: CRAB's wrapper checksums them and runs `edmProvDump` on
+  them after the chain. Later intermediates are deleted. Only `MiniAOD.root` is staged out.
+* 2018 FullSim SIM skips an event on a Geant4 stuck track (`SkipEvent = EventCorruption`): in
+  CMSSW_10_6 any stuck track aborts the whole job.
+
+## Pilot results (Nov 2026, high-Δm 20 cm, 5 jobs per chain)
+
+| Chain | Cores / memory requested | Peak memory | Run time per job | MiniAOD events per job |
+|---|---|---|---|---|
+| 2022 FullSim | 2 / 5000 MB | 3.7–4.0 GB | 1.8–3.1 h | 221–243 |
+| 2018 FullSim | 1 / 3000 MB | 2.2–2.5 GB | ~3.2 h (SIM 2.1 h) | 237 |
+| 2022 FastSim | 4 / 10000 MB | 8.5–8.8 GB | 15–35 min | 402–442 |
+| 2018 FastSim | 4 / 7000 MB | 4.4–4.8 GB | 30–70 min | 454 |
+
+All outputs pass `gencheck.py`; the 2022 FullSim jobs pass `pucheck.py` (2018: 1 job so far). Stage-out to T3_US_FNALLPC failed
+(`copy HTTP 500`, exit 60328) for every job that ran at Nebraska, Caltech or Florida, so those sites
+are in `SITE_BLACKLIST`. Failed jobs are recovered with `crab resubmit`.
