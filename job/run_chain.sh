@@ -16,6 +16,17 @@ cat chain.txt
 
 stamp() { date +%s; }
 
+# Log the seeds CRAB put into PSet.py (it doesn't), so that a failed job can be reproduced.
+# 10_X releases have python 2 only; a system python3 there can't import FWCore and falls through.
+for py in python3 python; do
+  ${py} -c '
+from PSet import process
+_rs = process.RandomNumberGeneratorService
+print("=== step 1 random seeds: " + " ".join("%s=%s" % (_n, getattr(_rs, _n).initialSeed.value())
+      for _n in sorted(_rs.parameterNames_()) if hasattr(getattr(_rs, _n), "initialSeed")))
+' 2>/dev/null && break
+done
+
 t0=$(stamp)
 echo "=== step 1 (PSet.py, ${CMSSW_VERSION}) starting at $(date)"
 cmsRun -j FrameworkJobReport.xml -p PSet.py
@@ -36,6 +47,21 @@ echo "=== keeping step-1 outputs for CRAB: ${KEEP}"
 while read -r n rel arch cfg consumed; do
   [ -z "${n}" ] && continue
   [ "${n}" = "1" ] && continue
+  # CRAB randomizes the seeds of step 1 (PSet.py) only; later steps would run with the fixed
+  # default seeds in every job, e.g. the same premix pileup events for event i of every job.
+  # Give each step fresh random seeds, as CRAB does for step 1 (seeds are untracked: PSetIDs
+  # are unchanged).  Works with the python 2 and 3 of all releases used.
+  seeded="${cfg%.py}_seeded.py"
+  cp "${cfg}" "${seeded}"
+  cat >> "${seeded}" <<'PY'
+
+from IOMC.RandomEngine.RandomServiceHelper import RandomNumberServiceHelper
+RandomNumberServiceHelper(process.RandomNumberGeneratorService).populate()
+_rs = process.RandomNumberGeneratorService
+print("=== random seeds: " + " ".join("%s=%s" % (_n, getattr(_rs, _n).initialSeed.value())
+      for _n in sorted(_rs.parameterNames_()) if hasattr(getattr(_rs, _n), "initialSeed")))
+PY
+  cfg="${seeded}"
   t0=$(stamp)
   echo "=== step ${n} (${cfg}, ${rel}) starting at $(date)"
   if [ "${rel}" = "${CMSSW_VERSION}" ]; then
