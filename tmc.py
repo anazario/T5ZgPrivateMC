@@ -297,9 +297,9 @@ def cmd_jobtest(args):
             thr = re.findall(r'Name="NumberOfThreads" Value="(\d+)"', text)
             print(f"  {line.strip()}  peak RSS {float(rss[-1]):.0f} MB" if rss else f"  {line.strip()}",
                   f"threads {thr[-1]}" if thr else "")
-    # empty files are run_chain.sh's placeholders for the deleted step-1 outputs
+    # step 1's outputs are kept on purpose (CRAB's wrapper post-processes them; see run_chain.sh)
     leftover = sorted(f for f in os.listdir(t) if f.endswith(".root") and f != "MiniAOD.root"
-                      and os.path.getsize(os.path.join(t, f)) > 0)
+                      and not f.startswith("step1"))
     print("leftover intermediate files:", leftover or "none")
     if rc:
         sys.exit(f"job failed, see {log}")

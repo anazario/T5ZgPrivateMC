@@ -3,7 +3,7 @@
 #
 # Step 1 is CRAB's own PSet.py (psetName with per-job seeds, event count and first lumi
 # applied by CRAB).  The remaining steps are listed in chain.txt, one per line:
-#     <step> <release> <scram_arch> <cfg> <input file to delete afterwards>
+#     <step> <release> <scram_arch> <cfg> <input file to delete afterwards, unless step 1 wrote it>
 # Steps in another release set that release up from CVMFS on the worker node.
 # Only MiniAOD.root is staged out (config.JobType.outputFiles).
 
@@ -22,7 +22,16 @@ cmsRun -j FrameworkJobReport.xml -p PSet.py
 rc=$?
 echo "=== step 1 exit ${rc} after $(( $(stamp) - t0 )) s"
 [ ${rc} -ne 0 ] && exit ${rc}
-rm -f step1_inLHE.root   # LHE copy written by the RAWSIM,LHE event content; not needed
+
+# CRAB's wrapper (CMSRunAnalysis.py) post-processes every output file listed in
+# FrameworkJobReport.xml, i.e. step 1's outputs: it stats and checksums them and, when the
+# report has no PSet hash, runs edmProvDump on them.  A missing file (50115) or an empty
+# placeholder (56) fails the job after the chain succeeded, so step 1's outputs are kept.
+# They are not staged out (disableAutomaticOutputCollection).  Take only the first PFN of
+# each <File> block (the file itself; later PFNs are its inputs).
+KEEP=$(awk '/<File>/{o=1} o && /<PFN>/{print; o=0}' FrameworkJobReport.xml \
+         | sed -e 's:.*<PFN>\(.*\)</PFN>.*:\1:' -e 's:^file\:::')
+echo "=== keeping step-1 outputs for CRAB: ${KEEP}"
 
 while read -r n rel arch cfg consumed; do
   [ -z "${n}" ] && continue
@@ -45,18 +54,11 @@ while read -r n rel arch cfg consumed; do
   fi
   echo "=== step ${n} exit ${rc} after $(( $(stamp) - t0 )) s"
   [ ${rc} -ne 0 ] && exit ${rc}
-  rm -f "${consumed}"
+  case " ${KEEP//$'\n'/ } " in
+    *" ${consumed} "*) ;;          # a step-1 output: CRAB still needs it
+    *) rm -f "${consumed}" ;;
+  esac
 done < chain.txt
-
-# CRAB's wrapper (CMSRunAnalysis.py AddChecksums) stats and checksums every output file
-# listed in FrameworkJobReport.xml, i.e. step 1's outputs, which were deleted above.
-# A missing one fails the job with 50115 after the chain succeeded, so leave empty
-# placeholders.  They are not staged out (disableAutomaticOutputCollection).
-# Take only the first PFN of each <File> block (the file itself; later PFNs are its inputs).
-for f in $(awk '/<File>/{o=1} o && /<PFN>/{print; o=0}' FrameworkJobReport.xml \
-             | sed -e 's:.*<PFN>\(.*\)</PFN>.*:\1:' -e 's:^file\:::'); do
-  [ -e "${f}" ] || { : > "${f}"; echo "=== placeholder for deleted step-1 output ${f}"; }
-done
 
 if [ ! -s MiniAOD.root ]; then
   echo "=== MiniAOD.root missing or empty"
