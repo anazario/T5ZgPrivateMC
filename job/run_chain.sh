@@ -48,6 +48,16 @@ while read -r n rel arch cfg consumed; do
   rm -f "${consumed}"
 done < chain.txt
 
+# CRAB's wrapper (CMSRunAnalysis.py AddChecksums) stats and checksums every output file
+# listed in FrameworkJobReport.xml, i.e. step 1's outputs, which were deleted above.
+# A missing one fails the job with 50115 after the chain succeeded, so leave empty
+# placeholders.  They are not staged out (disableAutomaticOutputCollection).
+# Take only the first PFN of each <File> block (the file itself; later PFNs are its inputs).
+for f in $(awk '/<File>/{o=1} o && /<PFN>/{print; o=0}' FrameworkJobReport.xml \
+             | sed -e 's:.*<PFN>\(.*\)</PFN>.*:\1:' -e 's:^file\:::'); do
+  [ -e "${f}" ] || { : > "${f}"; echo "=== placeholder for deleted step-1 output ${f}"; }
+done
+
 if [ ! -s MiniAOD.root ]; then
   echo "=== MiniAOD.root missing or empty"
   exit 90
