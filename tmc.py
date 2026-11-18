@@ -184,6 +184,10 @@ def crab_config_name(pilot):
 def write_crab_config(d, name, chain, point, ct, era, pilot=0):
     """pilot=N: only N jobs, under a separate request name and output dataset tag."""
     c = P.CHAINS[chain]
+    # CRAB ignores the blacklist for sites matched by a whitelist wildcard (see production.py)
+    bad = [s for s in c["whitelist"] if "*" in s or s in P.SITE_BLACKLIST]
+    if bad:
+        sys.exit(f"{chain}: whitelist must list explicit, non-blacklisted sites; got {bad}")
     cfgs = [cfg for n, cfg, i, o in step_files(chain)]
     total = pilot * c["events_per_job"] if pilot else c["total_events"]
     tag = f"{c['tag']}_{P.VERSION}" + ("_pilot" if pilot else "")

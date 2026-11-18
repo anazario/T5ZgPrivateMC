@@ -18,6 +18,19 @@ STORAGE_SITE = "T3_US_FNALLPC"
 # ASO transfer to T3_US_FNALLPC failed with "copy HTTP 500" (exit 60328) after the job had
 # succeeded (Nebraska 2/2, Caltech 1/1, Florida 1/1; CERN, Wisconsin, MIT, UCSD all fine).
 SITE_BLACKLIST = ["T2_US_Nebraska", "T2_US_Caltech", "T2_US_Florida"]
+# CRAB does not subtract the blacklist from a wildcard whitelist: in wave 1 (FastSim, Nov 2026)
+# the job ads had DESIRED_SITES = all of T2_US_* incl. the three sites above, and 343 jobs
+# failed with 60328 there.  So whitelists are explicit site names; tmc.py rejects wildcards
+# and any overlap with SITE_BLACKLIST.
+# US sites whose ASO transfers to T3_US_FNALLPC worked in the pilots and in wave 1.
+SITES_US = ["T2_US_MIT", "T2_US_Wisconsin", "T2_US_Purdue", "T2_US_UCSD", "T3_US_FNALLPC"]
+# FullSim reads premix from DBS over xrootd and can run anywhere.  CERN is proven; the other
+# large European T2s are not yet tested for ASO to FNAL: check the first finished jobs.
+SITES_WORLD = SITES_US + [
+    "T2_CH_CERN", "T2_DE_DESY", "T2_DE_RWTH", "T2_IT_Bari", "T2_IT_Legnaro", "T2_IT_Rome",
+    "T2_UK_London_IC", "T2_UK_SGrid_RALPP", "T2_FR_GRIF", "T2_ES_CIEMAT", "T2_BE_IIHE",
+    "T2_EE_Estonia",
+]
 VERSION = "v1"  # goes into the CRAB dataset tag; bump for a new production round
 
 # --------------------------------------------------------------------------- samples
@@ -88,7 +101,7 @@ CHAINS = {
         # 5000 MB (2500/core).  numberOfThreads is untracked, so PSetIDs don't change.
         "threads": 2,
         "max_memory_mb": 5000,
-        "whitelist": ["T2_*", "T3_*"],
+        "whitelist": SITES_WORLD,
         "steps": [
             step(R2022_GEN,
                 "Configuration/GenProduction/python/{frag}.py --eventcontent RAWSIM,LHE " + MON +
@@ -127,7 +140,7 @@ CHAINS = {
         "threads": 4,
         "max_memory_mb": 10000,
         # PUlib1 is read from cmseos: keep jobs on US sites
-        "whitelist": ["T2_US_*", "T3_US_FNALLPC"],
+        "whitelist": SITES_US,
         "steps": [
             step(R2022_GEN,
                 "Configuration/GenProduction/python/{frag}.py"
@@ -149,7 +162,7 @@ CHAINS = {
         "events_per_job": 800,
         "total_events": 300000,
         "max_memory_mb": 3000,
-        "whitelist": ["T2_*", "T3_*"],
+        "whitelist": SITES_WORLD,
         "steps": [
             step(R2018_GEN,
                 "Configuration/GenProduction/python/{frag}.py --eventcontent RAWSIM,LHE " + MON +
@@ -206,7 +219,7 @@ CHAINS = {
         "threads": 4,
         "max_memory_mb": 7000,
         # premix is read remotely (FNAL disk / CERN): keep jobs on US sites
-        "whitelist": ["T2_US_*", "T3_US_FNALLPC"],
+        "whitelist": SITES_US,
         "steps": [
             step(R2018_FAST,
                 "Configuration/GenProduction/python/{frag}.py"

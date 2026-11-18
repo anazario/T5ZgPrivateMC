@@ -101,4 +101,7 @@ Physics checks on the MiniAOD (run in any python3 FWLite release, e.g. CMSSW_13_
 
 All outputs pass `gencheck.py`; the 2022 FullSim jobs pass `pucheck.py` (2018: 1 job so far). Stage-out to T3_US_FNALLPC failed
 (`copy HTTP 500`, exit 60328) for every job that ran at Nebraska, Caltech or Florida, so those sites
-are in `SITE_BLACKLIST`. Failed jobs are recovered with `crab resubmit`.
+are in `SITE_BLACKLIST`. CRAB does not apply a blacklist to sites matched by a whitelist wildcard
+(wave 1 still ran 343 jobs there), so every chain uses an explicit list, `SITES_US` or
+`SITES_WORLD`, and `tmc.py` refuses wildcards and blacklisted sites. Failed jobs are recovered
+with `crab resubmit`.
