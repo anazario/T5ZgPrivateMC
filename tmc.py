@@ -216,6 +216,7 @@ config.Data.outLFNDirBase = '{P.OUT_LFN_BASE}'
 
 config.Site.storageSite = '{P.STORAGE_SITE}'
 config.Site.whitelist = {c['whitelist']!r}
+config.Site.blacklist = {P.SITE_BLACKLIST!r}
 """
     with open(os.path.join(d, crab_config_name(pilot)), "w") as f:
         f.write(text)

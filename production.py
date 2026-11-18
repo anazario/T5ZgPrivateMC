@@ -14,6 +14,10 @@ import os
 # CRAB requires the CERN username here; on cmseos /store/user/aabreuna is a link to .../anazario
 OUT_LFN_BASE = "/store/user/aabreuna/T5ZgPrivateMC"
 STORAGE_SITE = "T3_US_FNALLPC"
+# Sites whose temporary storage FNAL EOS could not pull from in the Nov 2026 pilots: every
+# ASO transfer to T3_US_FNALLPC failed with "copy HTTP 500" (exit 60328) after the job had
+# succeeded (Nebraska 2/2, Caltech 1/1, Florida 1/1; CERN, Wisconsin, MIT, UCSD all fine).
+SITE_BLACKLIST = ["T2_US_Nebraska", "T2_US_Caltech", "T2_US_Florida"]
 VERSION = "v1"  # goes into the CRAB dataset tag; bump for a new production round
 
 # --------------------------------------------------------------------------- samples
