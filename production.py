@@ -161,7 +161,10 @@ CHAINS = {
         "tag": "FullMini",
         "events_per_job": 800,
         "total_events": 300000,
-        "max_memory_mb": 3000,
+        # 1 thread / 3000 MB (the CRAB single-core maximum): pilot job 2 peaked at 3757 MB.
+        # 2 cores allow 5000 MB.  numberOfThreads is untracked, so PSetIDs don't change.
+        "threads": 2,
+        "max_memory_mb": 5000,
         "whitelist": SITES_WORLD,
         "steps": [
             step(R2018_GEN,
