@@ -152,9 +152,13 @@ CHAINS = {
                 " --datatier RAWSIM,LHE --conditions 106X_upgrade2018_realistic_v4"
                 " --beamspot Realistic25ns13TeVEarly2018Collision --step LHE,GEN --geometry DB:Extended"
                 " --era Run2_2018 --mc"),
+            # 10_6 Geant4 throws on any stuck track (GeomNav0003 -> EventCorruption), which killed a
+            # whole pilot job; 12_4 only throws above 0.1 GeV.  Drop that one event instead.
+            # options is untracked: the SIM PSetID is unchanged.
             step(R2018_GEN,
                 "--eventcontent RAWSIM " + MON + " --datatier GEN-SIM --conditions 106X_upgrade2018_realistic_v11_L1v1"
                 " --beamspot Realistic25ns13TeVEarly2018Collision --step SIM --geometry DB:Extended"
+                " --customise_commands 'process.options.SkipEvent = cms.untracked.vstring(\"EventCorruption\")'"
                 " --era Run2_2018 --runUnscheduled --mc"),
             step(R2018_GEN,
                 "--eventcontent PREMIXRAW " + MON + " --datatier GEN-SIM-DIGI"
