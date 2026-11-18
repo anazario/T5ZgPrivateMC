@@ -57,6 +57,12 @@ FRAGMENT_TEMPLATE = {  # in fragments/; XXXX/YYYY/ZZZZ = masses, TTTT = cτ in c
     "2022": "Template_T5Zg_13p6TeV_fragment.py",
     "2018": "Template_T5Zg_13TeV_fragment.py",
 }
+# janguian's gridpacks_central has no slc7 (2018) gridpack for mGo = 1800.  Ours was built with
+# genproductions mg265UL from his 2300 slc7 cards with only the gluino mass changed (Nov 2026).
+GRIDPACK_OVERRIDE = {  # (era, mGo) -> gridpack replacing the template's path
+    ("2018", 1800): "root://cmseos.fnal.gov//store/user/aabreuna/gridpacks/"
+                    "T5Zg_mGo-1800_slc7_amd64_gcc700_CMSSW_10_6_44_tarball.tar.xz",
+}
 
 PREMIX_2022_FULL = "dbs:/Neutrino_E-10_gun/Run3Summer21PrePremix-Summer22_124X_mcRun3_2022_realistic_v11-v2/PREMIX"
 PREMIX_2018_FULL = "dbs:/Neutrino_E-10_gun/RunIISummer20ULPrePremix-UL18_106X_upgrade2018_realistic_v11_L1v1-v2/PREMIX"

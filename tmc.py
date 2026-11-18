@@ -85,6 +85,12 @@ def fragment_text(point, ct, era):
     with open(os.path.join(ROOT, "fragments", P.FRAGMENT_TEMPLATE[era])) as f:
         t = f.read()
     mgo, mn2, mn1 = point
+    gridpack = P.GRIDPACK_OVERRIDE.get((era, mgo))
+    if gridpack:
+        default = re.findall(r"root://\S+_tarball\.tar\.xz", t)
+        if len(default) != 1:
+            sys.exit(f"{P.FRAGMENT_TEMPLATE[era]}: expected one gridpack path, found {default}")
+        t = t.replace(default[0], gridpack)
     for key, val in (("XXXX", str(mgo)), ("YYYY", str(mn2)), ("ZZZZ", str(mn1)), ("TTTT", "%f" % ct)):
         t = t.replace(key, val)
     return t

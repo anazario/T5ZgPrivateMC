@@ -41,6 +41,9 @@ history stored in the existing MiniAOD (`edmProvDump`):
   `premix/UL18_FastSim_disk.txt`. The rest of that library is only on tape, so `dbs:` can't be used.
 * Gridpacks (gluino mass only): `/store/user/janguian/gridpacks_central/T5Zg_mGo-*` (el8 / 14_0_18
   for 2022, slc7 / 10_6_44 for 2018). Fragments come from janguian's T5Zg templates in `fragments/`.
+  He has no slc7 gridpack for mGo = 1800, so we built one (genproductions `mg265UL`, his 2300 slc7
+  cards with only the gluino mass changed) at `/store/user/aabreuna/gridpacks/`; `GRIDPACK_OVERRIDE`
+  in `production.py` points the 2018 mGo-1800 fragments to it.
 
 ## Usage (cmslpc-el9)
 
