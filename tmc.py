@@ -297,7 +297,9 @@ def cmd_jobtest(args):
             thr = re.findall(r'Name="NumberOfThreads" Value="(\d+)"', text)
             print(f"  {line.strip()}  peak RSS {float(rss[-1]):.0f} MB" if rss else f"  {line.strip()}",
                   f"threads {thr[-1]}" if thr else "")
-    leftover = sorted(f for f in os.listdir(t) if f.endswith(".root") and f != "MiniAOD.root")
+    # empty files are run_chain.sh's placeholders for the deleted step-1 outputs
+    leftover = sorted(f for f in os.listdir(t) if f.endswith(".root") and f != "MiniAOD.root"
+                      and os.path.getsize(os.path.join(t, f)) > 0)
     print("leftover intermediate files:", leftover or "none")
     if rc:
         sys.exit(f"job failed, see {log}")

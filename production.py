@@ -181,9 +181,13 @@ CHAINS = {
             "PAT": "e2b541b9a2622f5ad47ca02585af3f7c",
         },
     },
-    # Releases, global tags, step list and PreMixingModule from the provenance of the central
-    # SMS-T5Wg RunIISummer20UL18 FastSim MiniAODv2; era/procModifiers are the standard UL18 FastSim
-    # recipe and are validated by the PAT PSetID below.
+    # From the provenance of the central SMS-T5Wg RunIISummer20UL18 FastSim MiniAODv2 (all
+    # non-generator modules of the FastSim step and the whole PAT config compared):
+    #  * FastSim step: era Run2_2018_FastSim (no GEM) and procModifier fastSimFixLongLivedBug, which
+    #    lets SM daughters of exotics produced outside the beam pipe make hits instead of being
+    #    decayed by FastSim (essential for the displaced N2).  No --runUnscheduled: central has
+    #    the modules on the paths, not in tasks.
+    #  * PAT: era Run2_2018 (with GEM); --fast adds the fastSim modifier.
     "2018_fast": {
         "tag": "FastMini",
         "events_per_job": 1600,
@@ -199,11 +203,11 @@ CHAINS = {
                 f" --pileup_input {PREMIX_2018_FAST} --mc --eventcontent AODSIM --fast --datatier AODSIM"
                 " --conditions 106X_upgrade2018_realistic_v16 --beamspot Realistic25ns13TeVEarly2018Collision"
                 " --step LHE,GEN,SIM,RECOBEFMIX,DIGI,DATAMIX,L1,DIGI2RAW,L1Reco,RECO --geometry DB:Extended"
-                " --datamix PreMix --era Run2_2018_FastSim --procModifiers premix_stage2 --runUnscheduled"),
+                " --datamix PreMix --era Run2_2018_FastSim --procModifiers premix_stage2,fastSimFixLongLivedBug"),
             step(R2018_FASTPAT,
                 "--eventcontent MINIAODSIM --fast " + MON + " --datatier MINIAODSIM"
                 " --conditions 106X_upgrade2018_realistic_v16_L1v1 --step PAT --procModifiers run2_miniAOD_UL"
-                " --geometry DB:Extended --era Run2_2018_FastSim --runUnscheduled --mc"),
+                " --geometry DB:Extended --era Run2_2018 --runUnscheduled --mc"),
         ],
         "expected_psetids": {
             "PAT": "1d31bd42d1d45aa3ad7364946c5ce28f",   # central SMS-T5Wg UL18 FastSim MiniAODv2
