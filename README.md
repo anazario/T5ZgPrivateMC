@@ -119,3 +119,32 @@ sites. Failed jobs are recovered with `crab resubmit`.
   which has no TLS client.
 * **Random segfaults at MIT, not understood:** crashes at a different place in CMSSW each time,
   22 of 25 at MIT on 21 nodes, also with the xrootd fix. 2018 FastSim no longer runs at MIT.
+
+## Ntuples (`ntuple.py`)
+
+KUCMSNtupleizer (`test/llpgana_miniaod.py`) runs over the MiniAOD in its own CMSSW_15_1_0_patch5 area
+(`/uscms_data/d3/anazario/YOURWORKINGAREA`). `cmsenv` there, source `crab-setup.sh`, then from this
+directory:
+
+```
+./ntuple.py status [samples]             # MiniAOD finished / submitted / to submit, ntuple job states
+./ntuple.py submit [--dryrun] [samples]  # submit finished MiniAOD files not yet submitted
+./ntuple.py proceed [samples]            # continue a --dryrun batch
+```
+
+* **Batches:** each `submit` sends the MiniAOD files that finished since the last one as a new CRAB
+  task per sample (`..._b1`, `_b2`, …). `work/<sample>/ntuple/ledger.json` lists the files of every
+  batch, so no file is submitted twice or skipped. File lists come from the MiniAOD task's finished
+  jobs, not from EOS (EOS can hold files of jobs CRAB still counts as running).
+* **Output:** next to the MiniAOD, `<sample>/KUCMSNtuple_SVHPM100_v38_<Fast|Full>Mini_v1/<timestamp>/`,
+  one timestamp per batch. `MiniAOD_N.root` holds exactly lumi N, so `crab report` shows which
+  MiniAOD files a batch processed.
+* **Options:** `multicrab=True hasGenInfo=True eventFilter=SVHPMet100`, plus
+  `106X_upgrade2018_realistic_v11_L1v1 / Run2_2018` or `124X_mcRun3_2022_realistic_v12 / Run3_2022`,
+  plus `doFastSim=True` for FastSim. 10 MiniAOD files per job.
+* **Sandbox:** the area also holds HiggsCombine, CombineHarvester and LLPCombine
+  (`HiggsAnalysis/CombinedLimit/data` alone is 313 MB), which pushed the sandbox over CRAB's limit.
+  `ntuple.py` swaps CRAB's tar filter (`UserTarball.excludeFromTar`) for one that also drops those
+  packages: 2.6 MB, nothing deleted from the area. Each submission checks the tarball.
+* **Local test (Nov 2026):** all 4 chains on 2 full MiniAOD files each: exit 0, 3–7 min and
+  1.3–1.6 GB per file, `nTotEvts` equal to the input events.
