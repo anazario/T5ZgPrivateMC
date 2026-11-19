@@ -8,6 +8,14 @@
 # Only MiniAOD.root is staged out (config.JobType.outputFiles).
 
 set -o pipefail
+
+# xrootd's fork handler closes every open connection whenever cmsRun forks, and CMSSW forks
+# every few minutes (CondorStatusService spawning condor_chirp).  In the xrootd 5.5.4 of
+# CMSSW_10_6_35_patch1 this races with a connection that is mid-TLS-handshake: SSL_write on a
+# freed SSL object, a segfault (exit 50117 / 5) in 2018 FastSim, which reads remote premix.
+# The forked children only exec, so they need no xrootd state.  Verified in 10_6_35_patch1:
+# with 0 the prepare handler returns without stopping anything and open files stay readable.
+export XRD_RUNFORKHANDLER=0
 TOP=$PWD
 JOB=$1
 echo "=== run_chain.sh: job ${JOB} on $(hostname) at $(date)"
