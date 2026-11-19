@@ -144,7 +144,8 @@ directory:
   MiniAOD files a batch processed.
 * **Options:** `multicrab=True hasGenInfo=True eventFilter=SVHPMet100`, plus
   `106X_upgrade2018_realistic_v11_L1v1 / Run2_2018` or `124X_mcRun3_2022_realistic_v12 / Run3_2022`,
-  plus `doFastSim=True` for FastSim. 10 MiniAOD files per job.
+  plus `doFastSim=True` for FastSim. 10 MiniAOD files per job. Sites: `SITES_US` (FNALLPC alone
+  ran no jobs in an hour; the T2s read the MiniAOD over xrootd).
 * **Sandbox:** the area also holds HiggsCombine, CombineHarvester and LLPCombine
   (`HiggsAnalysis/CombinedLimit/data` alone is 313 MB), which pushed the sandbox over CRAB's limit.
   `ntuple.py` swaps CRAB's tar filter (`UserTarball.excludeFromTar`) for one that also drops those

@@ -56,7 +56,10 @@ PSET = "llpgana_miniaod.py"       # in $CMSSW_BASE/src/KUCMSNtupleizer/KUCMSNtup
 # local test (Nov 2026, 2 files per chain): 3-5 min and 1.3-1.6 GB per MiniAOD file
 FILES_PER_JOB = 10
 MAX_MEMORY_MB = 2500
-WHITELIST = ["T3_US_FNALLPC"]     # inputs are on cmseos
+# Inputs are on cmseos; the T2s read them over xrootd.  FNALLPC alone ran none of the b1 jobs in
+# an hour (and none of ~6400 MiniAOD jobs that listed it), so the US T2s whose stage-out to
+# FNAL works are added (Nov 2026).
+WHITELIST = P.SITES_US
 
 COMMON = ["multicrab=True", "hasGenInfo=True", "eventFilter=SVHPMet100"]
 ERA_PARAMS = {
