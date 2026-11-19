@@ -124,53 +124,54 @@ def main():
     masses = {GLUINO: [], N2: [], N1: []}
     others = {}
 
-    for f in a.files:
-        for e in Events(f):
-            nev += 1
-            e.getByLabel("prunedGenParticles", h)
-            gp = h.product()
-            glu = [p for p in gp if abs(p.pdgId()) == GLUINO and p.isLastCopy()]
-            n2s = [p for p in gp if p.pdgId() == N2 and p.isLastCopy()]
-            if len(glu) != 2 or len(n2s) != 2:
-                bad_mult += 1
-            for g in glu:
-                masses[GLUINO].append(g.mass())
-                qs = [abs(g.daughter(i).pdgId()) for i in range(g.numberOfDaughters())
-                      if abs(g.daughter(i).pdgId()) < 10]
-                if len(qs) == 2 and qs[0] == qs[1] and qs[0] in flav:
-                    flav[qs[0]] += 1
-                    nglu_dec += 1
-                else:
-                    others[("gluino", tuple(sorted(qs)))] = others.get(("gluino", tuple(sorted(qs))), 0) + 1
-            ev_modes = []
-            for n2 in n2s:
-                ev_modes.append(sorted(n2.daughter(i).pdgId() for i in range(n2.numberOfDaughters())))
-            if len(ev_modes) == 2:
-                ng = sum(m == [PHOTON, N1] for m in ev_modes)
-                nz_ev = sum(m == [Z, N1] for m in ev_modes)
-                key = {(2, 0): "gamma gamma", (1, 1): "gamma Z", (0, 2): "Z Z"}.get((ng, nz_ev), "other")
-                ev_combo[key] = ev_combo.get(key, 0) + 1
-            for n2 in n2s:
-                masses[N2].append(n2.mass())
-                dau = [n2.daughter(i) for i in range(n2.numberOfDaughters())]
-                ids = sorted(d.pdgId() for d in dau)
-                n1 = [d for d in dau if d.pdgId() == N1]
-                if ids == [PHOTON, N1]:
-                    n2_modes["gamma"] += 1
-                elif ids == [Z, N1]:
-                    n2_modes["Z"] += 1
-                    z = last_copy([d for d in dau if d.pdgId() == Z][0])
-                    z_masses.append(z.mass())
-                    mode = z_mode(z)
-                    z_modes[mode] = z_modes.get(mode, 0) + 1
-                else:
-                    n2_modes["other"] += 1
-                    others[("N2", tuple(ids))] = others.get(("N2", tuple(ids)), 0) + 1
-                if n1:
-                    masses[N1].append(n1[0].mass())
-                    d = n1[0]
-                    L = math.sqrt((d.vx() - n2.vx()) ** 2 + (d.vy() - n2.vy()) ** 2 + (d.vz() - n2.vz()) ** 2)
-                    ct.append(L * n2.mass() / n2.p())
+    # One chain over all files: an Events object per file is never freed, and a few hundred of
+    # them exhaust memory (std::bad_alloc in ChainEvent).
+    for e in Events(a.files):
+        nev += 1
+        e.getByLabel("prunedGenParticles", h)
+        gp = h.product()
+        glu = [p for p in gp if abs(p.pdgId()) == GLUINO and p.isLastCopy()]
+        n2s = [p for p in gp if p.pdgId() == N2 and p.isLastCopy()]
+        if len(glu) != 2 or len(n2s) != 2:
+            bad_mult += 1
+        for g in glu:
+            masses[GLUINO].append(g.mass())
+            qs = [abs(g.daughter(i).pdgId()) for i in range(g.numberOfDaughters())
+                  if abs(g.daughter(i).pdgId()) < 10]
+            if len(qs) == 2 and qs[0] == qs[1] and qs[0] in flav:
+                flav[qs[0]] += 1
+                nglu_dec += 1
+            else:
+                others[("gluino", tuple(sorted(qs)))] = others.get(("gluino", tuple(sorted(qs))), 0) + 1
+        ev_modes = []
+        for n2 in n2s:
+            ev_modes.append(sorted(n2.daughter(i).pdgId() for i in range(n2.numberOfDaughters())))
+        if len(ev_modes) == 2:
+            ng = sum(m == [PHOTON, N1] for m in ev_modes)
+            nz_ev = sum(m == [Z, N1] for m in ev_modes)
+            key = {(2, 0): "gamma gamma", (1, 1): "gamma Z", (0, 2): "Z Z"}.get((ng, nz_ev), "other")
+            ev_combo[key] = ev_combo.get(key, 0) + 1
+        for n2 in n2s:
+            masses[N2].append(n2.mass())
+            dau = [n2.daughter(i) for i in range(n2.numberOfDaughters())]
+            ids = sorted(d.pdgId() for d in dau)
+            n1 = [d for d in dau if d.pdgId() == N1]
+            if ids == [PHOTON, N1]:
+                n2_modes["gamma"] += 1
+            elif ids == [Z, N1]:
+                n2_modes["Z"] += 1
+                z = last_copy([d for d in dau if d.pdgId() == Z][0])
+                z_masses.append(z.mass())
+                mode = z_mode(z)
+                z_modes[mode] = z_modes.get(mode, 0) + 1
+            else:
+                n2_modes["other"] += 1
+                others[("N2", tuple(ids))] = others.get(("N2", tuple(ids)), 0) + 1
+            if n1:
+                masses[N1].append(n1[0].mass())
+                d = n1[0]
+                L = math.sqrt((d.vx() - n2.vx()) ** 2 + (d.vy() - n2.vy()) ** 2 + (d.vz() - n2.vz()) ** 2)
+                ct.append(L * n2.mass() / n2.p())
 
     print(f"files: {len(a.files)}   events: {nev}   point: mGo={mgo:.0f} mN2={mn2:.0f} mN1={mn1:.0f}  "
           f"ctau={ctau:g} cm   Z {'on' if onshell_z else 'off'}-shell")
