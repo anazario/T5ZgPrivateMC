@@ -5,18 +5,20 @@ Runs in the KUCMSNtupleizer area (cmsenv there, then source crab-setup.sh):
 
   ./ntuple.py status [samples]            MiniAOD files finished / submitted / still to submit,
                                           and the job states of every ntuple batch
-  ./ntuple.py submit [--dryrun] [samples] submit the finished MiniAOD files not yet submitted,
-                                          as a new batch task per sample
+  ./ntuple.py submit [--dryrun] [samples] submit samples whose MiniAOD task is complete, as a new
+                                          batch task per sample (--partial: also incomplete ones)
+  ./ntuple.py killed sample request       mark a batch killed with `crab kill` in the ledger
   ./ntuple.py proceed [samples]           submit batches left by submit --dryrun
 
 Samples are glob patterns on the names of `./tmc.py list` (default: all).
 
 Book-keeping
+  * Whole samples only: submit skips a sample until every job of its MiniAOD task has finished,
+    so each sample's ntuples normally come from one batch.  --partial overrides this.
   * Each sample has a ledger, work/<sample>/ntuple/ledger.json, listing every batch (CRAB request
-    name, MiniAOD files, state "dryrun" or "submitted").  submit takes the MiniAOD task's
-    finished jobs, removes files already in the ledger and submits the rest as batch b<k>, so a
-    file is never submitted twice and none is skipped.  Run submit again as more MiniAOD
-    finishes.
+    name, MiniAOD files, state "dryrun", "submitted" or "killed").  submit takes the MiniAOD
+    task's finished jobs, removes files of non-killed batches and submits the rest as batch b<k>,
+    so a file is never submitted twice and none is skipped.
   * Files come from CRAB's finished jobs, not from an EOS listing: EOS can hold files of jobs
     CRAB still counts as running.  Every file is checked to exist on EOS.
   * All batches of a sample write to the same dataset tag, next to the MiniAOD:
@@ -149,7 +151,8 @@ def save_ledger(name, ledger):
 
 
 def ledger_files(ledger):
-    return {f for b in ledger["batches"] for f in b["files"]}
+    """MiniAOD files in batches that will produce ntuples (killed batches don't)."""
+    return {f for b in ledger["batches"] if b["state"] != "killed" for f in b["files"]}
 
 
 # --------------------------------------------------------------------------- MiniAOD inputs
@@ -255,6 +258,9 @@ def cmd_submit(args):
         new = [l for l in lfns if l not in ledger_files(ledger)]
         print(f"   MiniAOD {len(lfns)}/{njobs} finished {other or ''}; already submitted "
               f"{len(lfns) - len(new)}; new {len(new)}")
+        if other and not args.partial:
+            print("   MiniAOD task not complete, nothing submitted (--partial to submit anyway)")
+            continue
         if len(new) < args.min_files:
             print(f"   fewer than {args.min_files} new files, nothing submitted")
             continue
@@ -295,6 +301,17 @@ def cmd_proceed(args):
                 save_ledger(name, ledger)
 
 
+def cmd_killed(args):
+    ledger = load_ledger(args.sample)
+    hits = [b for b in ledger["batches"] if b["request"] == args.request]
+    if not hits:
+        sys.exit(f"{args.request} is not in the ledger of {args.sample}")
+    hits[0]["state"] = "killed"
+    hits[0]["killed"] = datetime.datetime.now().isoformat(timespec="seconds")
+    save_ledger(args.sample, ledger)
+    print(f"{args.request}: marked killed; its {len(hits[0]['files'])} files count as not submitted")
+
+
 def cmd_status(args):
     tot = {"mini": 0, "submitted": 0, "todo": 0}
     for name, chain, point, ct, era in select(args.samples):
@@ -305,8 +322,8 @@ def cmd_status(args):
         tot["mini"] += len(lfns); tot["submitted"] += len(done); tot["todo"] += todo
         print(f"{name:60s} MiniAOD {len(lfns):3d}/{njobs:3d}  submitted {len(done):3d}  to submit {todo:3d}")
         for b in ledger["batches"]:
-            if b["state"] == "dryrun":
-                print(f"   {b['request'][-3:]}: dryrun, waiting for proceed")
+            if b["state"] in ("dryrun", "killed"):
+                print(f"   {b['request'].rsplit('_', 1)[1]}: {b['state']}")
                 continue
             st = crab("status", dir=batch_project(name, b["request"]))
             counts = {}
@@ -323,7 +340,10 @@ def main():
     p = sub.add_parser("submit"); p.add_argument("samples", nargs="*")
     p.add_argument("--dryrun", action="store_true", help="upload the sandbox and split, submit nothing")
     p.add_argument("--min-files", type=int, default=1, help="skip samples with fewer new files")
+    p.add_argument("--partial", action="store_true", help="also submit samples whose MiniAOD is incomplete")
     p.set_defaults(f=cmd_submit)
+    p = sub.add_parser("killed"); p.add_argument("sample"); p.add_argument("request")
+    p.set_defaults(f=cmd_killed)
     p = sub.add_parser("proceed"); p.add_argument("samples", nargs="*"); p.set_defaults(f=cmd_proceed)
     args = ap.parse_args()
     args.f(args)

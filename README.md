@@ -132,9 +132,12 @@ directory:
 ./ntuple.py proceed [samples]            # continue a --dryrun batch
 ```
 
-* **Batches:** each `submit` sends the MiniAOD files that finished since the last one as a new CRAB
-  task per sample (`..._b1`, `_b2`, …). `work/<sample>/ntuple/ledger.json` lists the files of every
-  batch, so no file is submitted twice or skipped. File lists come from the MiniAOD task's finished
+* **Whole samples:** `submit` skips a sample until its MiniAOD task is complete (`--partial`
+  overrides this), so each sample's ntuples come from one task.
+* **Batches:** each `submit` sends a sample's MiniAOD files not yet submitted as a new CRAB task
+  (`..._b1`, `_b2`, …). `work/<sample>/ntuple/ledger.json` lists the files of every batch, so no
+  file is submitted twice or skipped. After `crab kill`, `./ntuple.py killed <sample> <request>`
+  marks the batch killed, and its files count as not submitted. File lists come from the MiniAOD task's finished
   jobs, not from EOS (EOS can hold files of jobs CRAB still counts as running).
 * **Output:** next to the MiniAOD, `<sample>/KUCMSNtuple_SVHPM100_v38_<Fast|Full>Mini_v1/<timestamp>/`,
   one timestamp per batch. `MiniAOD_N.root` holds exactly lumi N, so `crab report` shows which
