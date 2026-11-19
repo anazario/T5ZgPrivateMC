@@ -24,6 +24,10 @@ SITE_BLACKLIST = ["T2_US_Nebraska", "T2_US_Caltech", "T2_US_Florida"]
 # and any overlap with SITE_BLACKLIST.
 # US sites whose ASO transfers to T3_US_FNALLPC worked in the pilots and in wave 1.
 SITES_US = ["T2_US_MIT", "T2_US_Wisconsin", "T2_US_Purdue", "T2_US_UCSD", "T3_US_FNALLPC"]
+# 2018 FastSim without MIT: besides the xrootd fork crash (fixed in run_chain.sh), its jobs
+# segfault at random places in CMSSW (heap-corruption-like), 22 of 25 such crashes at MIT on 21
+# different nodes and 5 CPU models, also in a job with the xrootd fix.  Cause unknown (Nov 2026).
+SITES_US_NO_MIT = [s for s in SITES_US if s != "T2_US_MIT"]
 # FullSim reads premix from DBS over xrootd and can run anywhere.  CERN is proven; the other
 # large European T2s are not yet tested for ASO to FNAL: check the first finished jobs.
 SITES_WORLD = SITES_US + [
@@ -228,7 +232,7 @@ CHAINS = {
         "threads": 4,
         "max_memory_mb": 7000,
         # premix is read remotely (FNAL disk / CERN): keep jobs on US sites
-        "whitelist": SITES_US,
+        "whitelist": SITES_US_NO_MIT,
         "steps": [
             step(R2018_FAST,
                 "Configuration/GenProduction/python/{frag}.py"

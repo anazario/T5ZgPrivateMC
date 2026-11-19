@@ -102,9 +102,20 @@ Physics checks on the MiniAOD (run in any python3 FWLite release, e.g. CMSSW_13_
 | 2022 FastSim | 4 / 10000 MB | 8.5–8.8 GB | 15–35 min | 402–442 |
 | 2018 FastSim | 4 / 7000 MB | 4.4–4.8 GB | 30–70 min | 454 |
 
-All outputs pass `gencheck.py`; the 2022 FullSim jobs pass `pucheck.py` (2018: 1 job so far). Stage-out to T3_US_FNALLPC failed
+All outputs pass `gencheck.py`; the 2022 and 2018 FullSim jobs pass `pucheck.py` (all 5 jobs each). Stage-out to T3_US_FNALLPC failed
 (`copy HTTP 500`, exit 60328) for every job that ran at Nebraska, Caltech or Florida, so those sites
 are in `SITE_BLACKLIST`. CRAB does not apply a blacklist to sites matched by a whitelist wildcard
-(wave 1 still ran 343 jobs there), so every chain uses an explicit list, `SITES_US` or
-`SITES_WORLD`, and `tmc.py` refuses wildcards and blacklisted sites. Failed jobs are recovered
-with `crab resubmit`.
+(wave 1 still ran 343 jobs there), so every chain uses an explicit list, `SITES_US`,
+`SITES_US_NO_MIT` (2018 FastSim) or `SITES_WORLD`, and `tmc.py` refuses wildcards and blacklisted
+sites. Failed jobs are recovered with `crab resubmit`.
+
+## 2018 crashes (wave 1, Nov 2026)
+
+* **xrootd fork crash (exit 50117), fixed:** cmsRun forks every few minutes (CondorStatusService
+  runs `condor_chirp`), and xrootd's fork handler then closes every connection. In the xrootd 5.5.4
+  of CMSSW_10_6_35_patch1 (2018 FastSim, remote premix) this races with a TLS handshake and
+  segfaults in `SSL_write (s=0x0)`. 46 of 47 such crashes came within 5 s of a teardown.
+  `run_chain.sh` sets `XRD_RUNFORKHANDLER=0`. The 2018 FullSim premix step uses xrootd 4.8.5,
+  which has no TLS client.
+* **Random segfaults at MIT, not understood:** crashes at a different place in CMSSW each time,
+  22 of 25 at MIT on 21 nodes, also with the xrootd fix. 2018 FastSim no longer runs at MIT.
