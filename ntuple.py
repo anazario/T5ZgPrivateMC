@@ -86,6 +86,8 @@ COMMON = ["multicrab=True", "hasGenInfo=True", "eventFilter=SVHPMet100"]
 ERA_PARAMS = {
     "2018": ["globalTag=106X_upgrade2018_realistic_v11_L1v1", "runera=Run2_2018"],
     "2022": ["globalTag=124X_mcRun3_2022_realistic_v12", "runera=Run3_2022"],
+    # the GT the RunIII2024Summer24MiniAODv6 MiniAOD was made with
+    "2024": ["globalTag=150X_mcRun3_2024_realistic_v2", "runera=Run3_2024"],
 }
 FAST_PARAMS = ["doFastSim=True"]
 
@@ -101,7 +103,7 @@ CENTRAL = "central"  # chain field of a central sample in select()
 # split by events instead: at most ~2 h each.
 CENTRAL_EVENTS_PER_JOB = 2000
 TIERS = ("FullMini", "FastMini")
-CAMPAIGN_ERA = ((r"Summer20UL18", "2018"), (r"Run3Summer22(?!EE)", "2022"))
+CAMPAIGN_ERA = ((r"Summer20UL18", "2018"), (r"Run3Summer22(?!EE)", "2022"), (r"RunIII2024Summer24", "2024"))
 
 
 def read_inputs(path):
