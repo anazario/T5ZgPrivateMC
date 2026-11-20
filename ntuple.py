@@ -21,8 +21,11 @@ Book-keeping
     so a file is never submitted twice and none is skipped.
   * Files come from CRAB's finished jobs, not from an EOS listing: EOS can hold files of jobs
     CRAB still counts as running.  Every file is checked to exist on EOS.
-  * All batches of a sample write to the same dataset tag, next to the MiniAOD:
-    <OUT_LFN_BASE>/<sample>/KUCMSNtuple_SVHPM100_v38_<Fast|Full>Mini_v1/<timestamp per batch>/
+  * All batches of a sample write to the same dataset tag, in the collection layout that
+    KUCMSSkimmer/condor/skim_submit.py expects (it takes the tier from the collection name and
+    the sample from the task directory, <collection>_<sample>):
+    <OUT_LFN_BASE>/kucmsntuple_SMS_T5Zg_SVHPM100_<FullMini|FastMini>_v38/<sample>/
+        kucmsntuple_SMS_T5Zg_SVHPM100_<FullMini|FastMini>_v38_<sample>/<timestamp per batch>/
 
 Sandbox
   The KUCMSNtupleizer area also holds HiggsAnalysis/CombinedLimit (313 MB in its data/),
@@ -52,6 +55,8 @@ EOS = "root://cmseos.fnal.gov/"
 NTUPLE_VERSION = "v38"   # KUCMSNtupleizer version printed by the group's multicrab scripts
 NTUPLE_TAG = f"KUCMSNtuple_SVHPM100_{NTUPLE_VERSION}"  # dataset tag and request-name stem
 NTUPLE_LFN_BASE = P.OUT_LFN_BASE  # next to the MiniAOD (private area, no clash with group ntuples)
+# Tasks submitted before Nov 19 2026 wrote <OUT_LFN_BASE>/<sample>/KUCMSNtuple_SVHPM100_v38_
+# <Fast|Full>Mini_v1/<timestamp>/; their outputs were moved into the collections below.
 PSET = "llpgana_miniaod.py"       # in $CMSSW_BASE/src/KUCMSNtupleizer/KUCMSNtupleizer/test
 # local test (Nov 2026, 2 files per chain): 3-5 min and 1.3-1.6 GB per MiniAOD file
 FILES_PER_JOB = 10
@@ -72,6 +77,12 @@ FAST_PARAMS = ["doFastSim=True"]
 SANDBOX_DROP = ("HiggsAnalysis", "CombineHarvester", "LLPCombine")
 SANDBOX_KEEP_SRC = ("KUCMSNtupleizer",)
 SANDBOX_MAX_MB = 50
+
+
+def collection(chain):
+    """kucmsntuple_* collection of a chain: one per tier, both eras (skim_submit.py reads the
+    tier from this name and the year from the sample name)."""
+    return f"kucmsntuple_SMS_T5Zg_SVHPM100_{P.CHAINS[chain]['tag']}_{NTUPLE_VERSION}"
 
 
 def py_cfg_params(chain, era):
@@ -239,8 +250,8 @@ def crab_config(name, chain, point, ct, era, request, filelist):
     c.Data.splitting = "FileBased"
     c.Data.unitsPerJob = FILES_PER_JOB
     c.Data.publication = False
-    c.Data.outputDatasetTag = f"{NTUPLE_TAG}_{P.CHAINS[chain]['tag']}_{P.VERSION}"
-    c.Data.outLFNDirBase = NTUPLE_LFN_BASE
+    c.Data.outputDatasetTag = f"{collection(chain)}_{P.sample_name(point, ct, era)}"
+    c.Data.outLFNDirBase = f"{NTUPLE_LFN_BASE}/{collection(chain)}"
     c.Site.storageSite = P.STORAGE_SITE
     c.Site.whitelist = WHITELIST
     return c

@@ -139,9 +139,14 @@ directory:
   file is submitted twice or skipped. After `crab kill`, `./ntuple.py killed <sample> <request>`
   marks the batch killed, and its files count as not submitted. File lists come from the MiniAOD task's finished
   jobs, not from EOS (EOS can hold files of jobs CRAB still counts as running).
-* **Output:** next to the MiniAOD, `<sample>/KUCMSNtuple_SVHPM100_v38_<Fast|Full>Mini_v1/<timestamp>/`,
-  one timestamp per batch. `MiniAOD_N.root` holds exactly lumi N, so `crab report` shows which
-  MiniAOD files a batch processed.
+* **Output:** in the layout `KUCMSSkimmer/condor/skim_submit.py` reads, one collection per tier:
+  `kucmsntuple_SMS_T5Zg_SVHPM100_<FullMini|FastMini>_v38/<sample>/kucmsntuple_SMS_T5Zg_SVHPM100_<FullMini|FastMini>_v38_<sample>/<timestamp>/`,
+  one timestamp per batch. The skimmer takes the tier from the collection name and the year
+  from the sample name. Tasks submitted before Nov 19 2026 wrote `<sample>/KUCMSNtuple_SVHPM100_v38_<Fast|Full>Mini_v1/`;
+  those outputs were moved into the collections.
+* **Completeness:** `crab report` lists one lumi per job for `userInputFiles` tasks, so it can't
+  show which MiniAOD files were processed. Check that the summed `nTotEvts` of a sample's ntuples
+  equals the event count of its MiniAOD files.
 * **Options:** `multicrab=True hasGenInfo=True eventFilter=SVHPMet100`, plus
   `106X_upgrade2018_realistic_v11_L1v1 / Run2_2018` or `124X_mcRun3_2022_realistic_v12 / Run3_2022`,
   plus `doFastSim=True` for FastSim. 10 MiniAOD files per job. Sites: `SITES_US` (FNALLPC alone
