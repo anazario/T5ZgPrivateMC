@@ -156,8 +156,9 @@ When a sample's last jobs keep hanging, kill the task and rerun only the unfinis
 ## Ntuples (`ntuple.py`)
 
 KUCMSNtupleizer (`test/llpgana_miniaod.py`) runs over the MiniAOD in its own CMSSW_15_1_0_patch5 area
-(`/uscms_data/d3/anazario/YOURWORKINGAREA`). `cmsenv` there, source `crab-setup.sh`, then from this
-directory:
+(`/uscms_data/d3/anazario/YOURWORKINGAREA`). Run `ntuple.py` from this directory. If `cmsenv` there and
+`crab-setup.sh` aren't set up, it re-runs itself in a shell that does both. It finds the area as
+`../CMSSW_15_1_0_patch5` or `../*/CMSSW_15_1_0_patch5` (with `src/KUCMSNtupleizer`), or takes it from `$KUCMS_AREA`:
 
 ```
 ./ntuple.py status [samples]             # MiniAOD finished / submitted / to submit, ntuple job states

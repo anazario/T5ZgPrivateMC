@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """KUCMSNtupleizer CRAB tasks over the MiniAOD made by tmc.py, submitted in batches.
 
-Runs in the KUCMSNtupleizer area (cmsenv there, then source crab-setup.sh):
+Needs cmsenv in the KUCMSNtupleizer area and crab-setup.sh.  Without them ntuple.py re-runs
+itself in a shell that sets both up (ensure_env): the area is $KUCMS_AREA, or else the
+NTUPLE_RELEASE area next to this directory (../NTUPLE_RELEASE or ../*/NTUPLE_RELEASE).
 
   ./ntuple.py status [samples]            MiniAOD files finished / submitted / still to submit,
                                           and the job states of every ntuple batch
@@ -52,6 +54,7 @@ import glob
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tarfile
@@ -69,6 +72,7 @@ NTUPLE_TAG = f"KUCMSNtuple_SVHPM100_{NTUPLE_VERSION}"  # dataset tag and request
 NTUPLE_LFN_BASE = P.OUT_LFN_BASE  # next to the MiniAOD (private area, no clash with group ntuples)
 # Tasks submitted before Nov 19 2026 wrote <OUT_LFN_BASE>/<sample>/KUCMSNtuple_SVHPM100_v38_
 # <Fast|Full>Mini_v1/<timestamp>/; their outputs were moved into the collections below.
+NTUPLE_RELEASE = "CMSSW_15_1_0_patch5"  # the KUCMSNtupleizer area; $KUCMS_AREA overrides
 PSET = "llpgana_miniaod.py"       # in $CMSSW_BASE/src/KUCMSNtupleizer/KUCMSNtupleizer/test
 # local test (Nov 2026, 2 files per chain): 3-5 min and 1.3-1.6 GB per MiniAOD file
 FILES_PER_JOB = 10
@@ -199,6 +203,51 @@ def ntuple_dir(name):
 
 def batch_project(name, request):
     return os.path.join(ntuple_dir(name), f"crab_{request}")
+
+
+def env_ready():
+    base = os.environ.get("CMSSW_BASE", "")
+    if not base or not os.path.isdir(os.path.join(base, "src/KUCMSNtupleizer")):
+        return False
+    try:
+        import CRABAPI.RawCommand  # noqa: F401
+    except Exception:  # noqa: BLE001 - any failure means crab-setup.sh is missing or broken
+        return False
+    return True
+
+
+def ntuple_area():
+    if os.environ.get("KUCMS_AREA"):
+        return os.environ["KUCMS_AREA"]
+    up = os.path.dirname(ROOT)
+    hits = [d for d in glob.glob(os.path.join(up, NTUPLE_RELEASE)) + glob.glob(os.path.join(up, "*", NTUPLE_RELEASE))
+            if os.path.isdir(os.path.join(d, "src/KUCMSNtupleizer"))]
+    if len(hits) != 1:
+        sys.exit(f"found {len(hits)} {NTUPLE_RELEASE} areas with src/KUCMSNtupleizer next to {ROOT} {hits}; "
+                 f"set KUCMS_AREA=/path/to/{NTUPLE_RELEASE} or cmsenv there and source crab-setup.sh")
+    return hits[0]
+
+
+def ensure_env():
+    """Re-run this command after cmsenv in the KUCMSNtupleizer area and crab-setup.sh."""
+    if env_ready():
+        return
+    if os.environ.get("NTUPLE_PY_REEXEC"):
+        sys.exit("cmsenv + crab-setup.sh did not give a working CRAB client with KUCMSNtupleizer; "
+                 "set them up by hand to see the error")
+    area = ntuple_area()
+    print(f"(setting up {area}: cmsenv + crab-setup.sh)", file=sys.stderr)
+    script = "\n".join([
+        "source /cvmfs/cms.cern.ch/cmsset_default.sh",
+        f"cd {shlex.quote(os.path.join(area, 'src'))}",
+        "eval `scramv1 runtime -sh`",
+        "source /cvmfs/cms.cern.ch/common/crab-setup.sh",
+        f"cd {shlex.quote(os.getcwd())}",
+        "export NTUPLE_PY_REEXEC=1",
+        'exec python3 "$@"',
+    ])
+    sys.stdout.flush()
+    os.execvp("bash", ["bash", "-c", script, "bash", os.path.realpath(__file__)] + sys.argv[1:])
 
 
 def crab(cmd, *args, **kw):
@@ -507,6 +556,7 @@ def main():
     p = sub.add_parser("proceed"); p.add_argument("samples", nargs="*"); p.set_defaults(f=cmd_proceed)
     p.add_argument("--inputs", help=inputs_help)
     args = ap.parse_args()
+    ensure_env()
     args.f(args)
 
 
