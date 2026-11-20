@@ -241,7 +241,8 @@ def ensure_env():
         "source /cvmfs/cms.cern.ch/cmsset_default.sh",
         f"cd {shlex.quote(os.path.join(area, 'src'))}",
         "eval `scramv1 runtime -sh`",
-        "source /cvmfs/cms.cern.ch/common/crab-setup.sh",
+        # explicit "prod": a sourced script sees the caller's positional args ("$@" = ntuple.py ...)
+        "source /cvmfs/cms.cern.ch/common/crab-setup.sh prod",
         f"cd {shlex.quote(os.getcwd())}",
         "export NTUPLE_PY_REEXEC=1",
         'exec python3 "$@"',
