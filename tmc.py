@@ -492,9 +492,12 @@ def cmd_recover(args):
     for v in jobs.values():
         states[v["State"]] = states.get(v["State"], 0) + 1
     print(f"== {name}: {st.get('status')} {states}")
+    # After `crab kill` CRAB shows the task FAILED and its killed jobs "failed" (Nov 2026), so
+    # the ledger's kill record counts too.
+    killed = st.get("status") == "KILLED" or bool(led["killed"])
     if args.kill:
-        if st.get("status") == "KILLED":
-            sys.exit("   already killed")
+        if killed:
+            sys.exit(f"   already killed ({led['killed'] or 'status KILLED'})")
         moving = sorted((int(j) for j, v in jobs.items() if v["State"] == "transferring"))
         if moving:  # a killed job could still land its file: let them finish first
             sys.exit(f"   jobs {moving} are transferring their output; kill after they finish")
@@ -509,8 +512,9 @@ def cmd_recover(args):
         print("   killed.  Run ./tmc.py recover again once crab status shows no idle or running jobs.")
         return
     active = sorted(int(j) for j, v in jobs.items() if v["State"] in recovery.ACTIVE_STATES)
-    if st.get("status") != "KILLED" or active:
-        msg = f"   task is {st.get('status')}, active jobs {active[:20]}: kill it first (--kill) and wait"
+    if not killed or active:
+        msg = (f"   task is {st.get('status')}, {'killed' if killed else 'not killed'}, active jobs "
+               f"{active[:20]}: kill it first (--kill) and wait until no job is active")
         if not args.dryrun:
             sys.exit(msg)
         print(msg + "  [--dryrun: planning anyway]")
