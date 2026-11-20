@@ -13,10 +13,14 @@ executed inside the container that matches the release (cmssw-el7 / cmssw-el8).
     ./tmc.py submit [SAMPLE ...] [--dryrun] [--pilot N]   # --pilot N: only N jobs, separate task
     ./tmc.py proceed [SAMPLE ...] [--pilot]   # submit a task that was uploaded with --dryrun
     ./tmc.py status [SAMPLE ...] [--pilot]
+    ./tmc.py recover SAMPLE --kill [--dryrun]  # kill a task whose last jobs hang
+    ./tmc.py recover SAMPLE [--dryrun]         # rerun its unfinished jobs as batch r<k>
+    ./tmc.py adopt [SAMPLE ...] [--dryrun]     # move finished recovery files into the task dir
 
-SAMPLE may be a full sample name or any unique substring of it.
+SAMPLE may be a full sample name or any unique substring of it.  Recovery: see recovery.py.
 """
 import argparse
+import json
 import os
 import re
 import shutil
@@ -26,6 +30,9 @@ import tempfile
 import time
 
 import production as P
+import recovery
+
+EOS_URL = "root://cmseos.fnal.gov/"
 
 # Physical path: at the LPC ~/nobackup is a symlink chain into /uscms_data/dN, which the
 # cmssw-elX containers don't mount by default, so ROOT is bound into every container (run_in).
@@ -179,16 +186,25 @@ def cmd_configs(args):
         write_crab_config(d, name, chain, point, ct, era)
 
 
-def request_name(name, pilot):
-    return f"{name}_{P.VERSION}" + ("_pilot" if pilot else "")
+def request_name(name, pilot, recover=None):
+    return (f"{name}_{P.VERSION}" + ("_pilot" if pilot else "")
+            + (f"_r{recover}" if recover else ""))
 
 
-def crab_config_name(pilot):
+def crab_config_name(pilot, recover=None):
+    if recover:
+        return f"crabConfig_r{recover}.py"
     return "crabConfig_pilot.py" if pilot else "crabConfig.py"
 
 
-def write_crab_config(d, name, chain, point, ct, era, pilot=0):
-    """pilot=N: only N jobs, under a separate request name and output dataset tag."""
+def recover_dir(d, k):
+    return os.path.join(d, "recover", f"r{k}")
+
+
+def write_crab_config(d, name, chain, point, ct, era, pilot=0, recover=None):
+    """pilot=N: only N jobs, under a separate request name and output dataset tag.
+    recover={"k", "njobs", "runtime_min"}: recovery batch r<k> (see recovery.py), which ships
+    recover/r<k>/recover.txt and the run_chain.sh copied next to it."""
     c = P.CHAINS[chain]
     # CRAB ignores the blacklist for sites matched by a whitelist wildcard (see production.py)
     bad = [s for s in c["whitelist"] if "*" in s or s in P.SITE_BLACKLIST]
@@ -197,24 +213,33 @@ def write_crab_config(d, name, chain, point, ct, era, pilot=0):
     cfgs = [cfg for n, cfg, i, o in step_files(chain)]
     total = pilot * c["events_per_job"] if pilot else c["total_events"]
     tag = f"{c['tag']}_{P.VERSION}" + ("_pilot" if pilot else "")
+    inputs, script, runtime, k = ["chain.txt"] + cfgs[1:], "run_chain.sh", 2000, None
+    if recover:
+        k = recover["k"]
+        total = recover["njobs"] * c["events_per_job"]
+        tag += f"_r{k}"
+        rdir = os.path.relpath(recover_dir(d, k), d)
+        inputs.append(os.path.join(rdir, "recover.txt"))
+        script = os.path.join(rdir, "run_chain.sh")
+        runtime = recover["runtime_min"]
     text = f"""from CRABClient.UserUtilities import config
 config = config()
 
-config.General.requestName = '{request_name(name, pilot)}'
+config.General.requestName = '{request_name(name, pilot, k)}'
 config.General.workArea = 'crab_projects'
 config.General.transferOutputs = True
 config.General.transferLogs = False
 
 config.JobType.pluginName = 'PrivateMC'
 config.JobType.psetName = '{cfgs[0]}'
-config.JobType.scriptExe = 'run_chain.sh'
-config.JobType.inputFiles = {['chain.txt'] + cfgs[1:]!r}
+config.JobType.scriptExe = '{script}'
+config.JobType.inputFiles = {inputs!r}
 config.JobType.outputFiles = ['MiniAOD.root']
 config.JobType.disableAutomaticOutputCollection = True
 config.JobType.allowUndistributedCMSSW = True
 config.JobType.numCores = {c.get('threads', 1)}
 config.JobType.maxMemoryMB = {c['max_memory_mb']}
-config.JobType.maxJobRuntimeMin = 2000
+config.JobType.maxJobRuntimeMin = {runtime}
 
 config.Data.outputPrimaryDataset = '{P.sample_name(point, ct, era)}'
 config.Data.splitting = 'EventBased'
@@ -228,7 +253,7 @@ config.Site.storageSite = '{P.STORAGE_SITE}'
 config.Site.whitelist = {c['whitelist']!r}
 config.Site.blacklist = {P.SITE_BLACKLIST!r}
 """
-    with open(os.path.join(d, crab_config_name(pilot)), "w") as f:
+    with open(os.path.join(d, crab_config_name(pilot, k)), "w") as f:
         f.write(text)
 
 
@@ -291,8 +316,14 @@ def cmd_jobtest(args):
     pset += f"    process.externalLHEProducer.nEvents = cms.untracked.uint32({args.n})\n"
     with open(os.path.join(t, "PSet.py"), "w") as f:
         f.write(pset)
-    for fname in ["chain.txt", "run_chain.sh"] + [cfg for n, cfg, i, o in files[1:]]:
+    for fname in ["chain.txt"] + [cfg for n, cfg, i, o in files[1:]]:
         shutil.copy(os.path.join(d, fname), t)
+    # the repository's run_chain.sh, i.e. what the next task (or recovery batch) will ship
+    shutil.copy(os.path.join(ROOT, "job", "run_chain.sh"), t)
+    E = P.CHAINS[chain]["events_per_job"]
+    if args.as_job:  # run as recovery job 1 standing in for original job N (see recovery.py)
+        with open(os.path.join(t, "recover.txt"), "w") as f:
+            f.write(f"1 {args.as_job} {E}\n")
     rel, arch = gen_release(chain)
     log = os.path.join(t, "job.log")
     print(f"running run_chain.sh in {t} (sandbox release {rel}); log: {log}")
@@ -316,7 +347,28 @@ def cmd_jobtest(args):
         sys.exit(f"job failed, see {log}")
     s = P.CHAINS[chain]["steps"][-1]
     print(f"{args.n} LHE events -> {events_in(t, 'MiniAOD.root', s)} MiniAOD events")
+    events = file_events(os.path.join(t, "MiniAOD.root"))
+    job = args.as_job or 1
+    lo, hi = recovery.expected_events(job, E)
+    problems = recovery.check_numbering(events, job, E)
+    print(f"numbering as job {job} (run 1, lumi {job}, events {lo}-{hi}): "
+          + ("OK" if not problems else "FAILED: " + "; ".join(problems))
+          + (f"; events {min(e for _, _, e in events)}-{max(e for _, _, e in events)}" if events else ""))
     cmd_check(argparse.Namespace(file=os.path.join(t, "MiniAOD.root"), chain=chain))
+    if problems:
+        sys.exit(1)
+
+
+def file_events(path):
+    """[(run, lumi, event)] of a local file or an LFN (read over xrootd), via edmFileUtil -e."""
+    url = path if os.path.exists(path) else EOS_URL + path
+    cwd = os.path.dirname(os.path.abspath(path)) if os.path.exists(path) else WORK
+    out = os.path.join(cwd, ".events")
+    rel, arch = P.R2022_PAT
+    run_in(rel, arch, [f"edmFileUtil -e {url} > {out} 2>&1 || true"], cwd)
+    text = open(out, errors="replace").read()
+    os.remove(out)
+    return recovery.parse_edmfileutil_events(text)
 
 
 def events_in(cwd, fname, s):
@@ -380,6 +432,201 @@ def cmd_status(args):
                 lambda d, name: f"crab status -d crab_projects/crab_{request_name(name, args.pilot)}")
 
 
+# ----------------------------------------------------------------------------- recovery
+def crab_json(d, project, cmd="status"):
+    """crabCommand(cmd, dir=project) through CRABAPI, run in the 2022 GEN release (el8)."""
+    rel, arch = P.R2022_GEN
+    out, py, log = (os.path.join(d, x) for x in (".crab.json", ".crab_json.py", ".crab_json.log"))
+    with open(py, "w") as f:
+        f.write("import json\nfrom CRABAPI.RawCommand import crabCommand\n"
+                f"json.dump(crabCommand({cmd!r}, dir={project!r}), open({out!r}, 'w'), default=str)\n")
+    rc = run_in(rel, arch, ["source /cvmfs/cms.cern.ch/common/crab-setup.sh", f"python3 {py}"], d, log=log)
+    if rc or not os.path.exists(out):
+        sys.exit(f"crab {cmd} -d {project} failed, see {log}")
+    with open(out) as f:
+        res = json.load(f)
+    for x in (out, py, log):
+        os.remove(x)
+    return res
+
+
+def xrd(*args):
+    r = subprocess.run(["xrdfs", EOS_URL.rstrip("/")] + list(args), capture_output=True, text=True)
+    return r.returncode, r.stdout, r.stderr
+
+
+def xrd_ls(path):
+    """Names in an EOS directory, or None if it doesn't exist."""
+    rc, out, err = xrd("ls", path)
+    return [os.path.basename(x) for x in out.split()] if rc == 0 else None
+
+
+def xrd_exists(path):
+    return xrd("stat", path)[0] == 0
+
+
+def task_dir(lfn_base):
+    """The one CRAB timestamp directory under an output dataset directory (None if none yet)."""
+    stamps = [s for s in (xrd_ls(lfn_base) or []) if re.match(r"^\d{6}_\d{6}$", s)]
+    if len(stamps) > 1:
+        sys.exit(f"{lfn_base}: more than one task directory: {stamps}")
+    return f"{lfn_base}/{stamps[0]}" if stamps else None
+
+
+def mini_lfn_base(point, ct, era, chain, k=None):
+    return (f"{P.OUT_LFN_BASE}/{P.sample_name(point, ct, era)}/{P.CHAINS[chain]['tag']}_{P.VERSION}"
+            + (f"_r{k}" if k else ""))
+
+
+def cmd_recover(args):
+    """Kill a MiniAOD task (--kill), then rerun its unfinished jobs as a recovery batch."""
+    (name, chain, point, ct, era), = select([args.sample])
+    c = P.CHAINS[chain]
+    E = c["events_per_job"]
+    d = os.path.join(WORK, name)
+    orig = f"crab_projects/crab_{request_name(name, 0)}"
+    led = recovery.load(WORK, name)
+    st = crab_json(d, orig)
+    jobs = st["jobs"]
+    states = {}
+    for v in jobs.values():
+        states[v["State"]] = states.get(v["State"], 0) + 1
+    print(f"== {name}: {st.get('status')} {states}")
+    if args.kill:
+        if st.get("status") == "KILLED":
+            sys.exit("   already killed")
+        moving = sorted((int(j) for j, v in jobs.items() if v["State"] == "transferring"))
+        if moving:  # a killed job could still land its file: let them finish first
+            sys.exit(f"   jobs {moving} are transferring their output; kill after they finish")
+        if args.dryrun:
+            print("   --dryrun: would kill the task")
+            return
+        rel, arch = P.R2022_GEN
+        if run_in(rel, arch, ["source /cvmfs/cms.cern.ch/common/crab-setup.sh", f"crab kill -d {orig}"], d):
+            sys.exit("   crab kill failed")
+        led["killed"] = recovery.now()
+        recovery.save(WORK, name, led)
+        print("   killed.  Run ./tmc.py recover again once crab status shows no idle or running jobs.")
+        return
+    active = sorted(int(j) for j, v in jobs.items() if v["State"] in recovery.ACTIVE_STATES)
+    if st.get("status") != "KILLED" or active:
+        msg = f"   task is {st.get('status')}, active jobs {active[:20]}: kill it first (--kill) and wait"
+        if not args.dryrun:
+            sys.exit(msg)
+        print(msg + "  [--dryrun: planning anyway]")
+    finished = {int(j) for j, v in jobs.items() if v["State"] == "finished"}
+    adopted = {int(n) for n in led["adopted"]}
+    pending = recovery.pending_jobs(led)
+    missing = sorted(set(int(j) for j in jobs) - finished - adopted - pending)
+    print(f"   finished {len(finished)}, adopted {len(adopted)}, in recovery batches {len(pending)}, "
+          f"to recover {len(missing)}: {missing}")
+    if not missing:
+        return
+    # A file for a job CRAB doesn't count as finished: don't overwrite or duplicate it
+    base = task_dir(mini_lfn_base(point, ct, era, chain))
+    present = {}
+    for n in list(missing):
+        sub = f"{base}/{n // 1000:04d}"
+        if sub not in present:
+            present[sub] = set(xrd_ls(sub) or [])
+        if f"MiniAOD_{n}.root" in present[sub]:
+            msg = f"   {sub}/MiniAOD_{n}.root exists although job {n} is not finished: check it"
+            if not args.dryrun:
+                sys.exit(msg)
+            print(msg + "  [--dryrun: leaving it out]")
+            missing.remove(n)
+    if not missing:
+        return
+    # Good jobs' longest run time x 2.5, at least 4 h (a hung job then costs 4 h, not 33 h)
+    walls = [v["WallDurations"][-1] for j, v in jobs.items()
+             if int(j) in finished and v.get("WallDurations")]
+    longest = max(walls) / 60 if walls else 0
+    runtime = min(2000, max(240, int(-(-2.5 * longest // 10) * 10)))
+    k = len(led["batches"]) + 1
+    mapping = {str(i): n for i, n in enumerate(missing, 1)}
+    request = request_name(name, 0, k)
+    print(f"   batch r{k}: {len(missing)} jobs, maxJobRuntimeMin {runtime} (longest good job "
+          f"{longest:.0f} min), sites {c['whitelist']}")
+    print(f"   recovery job -> original job: {' '.join(f'{i}->{n}' for i, n in mapping.items())}")
+    if os.path.exists(os.path.join(d, "crab_projects", f"crab_{request}")):
+        sys.exit(f"   crab_projects/crab_{request} exists but is not in the ledger: check it")
+    rdir = recover_dir(d, k)
+    os.makedirs(rdir, exist_ok=True)
+    with open(os.path.join(rdir, "recover.txt"), "w") as f:
+        f.writelines(f"{i} {n} {E}\n" for i, n in mapping.items())
+    shutil.copy(os.path.join(ROOT, "job", "run_chain.sh"), rdir)
+    write_crab_config(d, name, chain, point, ct, era,
+                      recover={"k": k, "njobs": len(missing), "runtime_min": runtime})
+    if args.dryrun:
+        print(f"   --dryrun: wrote {crab_config_name(0, k)} and {os.path.relpath(rdir, d)}/; nothing submitted")
+        return
+    rel, arch = gen_release(chain)
+    run_in(rel, arch, ["source /cvmfs/cms.cern.ch/common/crab-setup.sh",
+                       f"crab submit -c {crab_config_name(0, k)}"], d)
+    if not os.path.isdir(os.path.join(d, "crab_projects", f"crab_{request}")):
+        sys.exit("   crab submit made no project directory")
+    led["batches"].append({"k": k, "request": request, "map": mapping, "events_per_job": E,
+                           "runtime_min": runtime, "state": "submitted", "time": recovery.now()})
+    recovery.save(WORK, name, led)
+    print(f"   submitted {request}; recorded in {os.path.relpath(recovery.ledger_path(WORK, name), ROOT)}")
+
+
+def cmd_adopt(args):
+    """Move finished recovery files into the original task directory as MiniAOD_<N>.root."""
+    for name, chain, point, ct, era in select(args.samples):
+        led = recovery.load(WORK, name)
+        live = [b for b in led["batches"] if b["state"] == "submitted"]
+        if not live:
+            continue
+        d = os.path.join(WORK, name)
+        print(f"== {name}")
+        dst_base = task_dir(mini_lfn_base(point, ct, era, chain))
+        checked = False
+        for b in live:
+            k, E = b["k"], b["events_per_job"]
+            jobs = crab_json(d, f"crab_projects/crab_{b['request']}")["jobs"]
+            src_base = task_dir(mini_lfn_base(point, ct, era, chain, k))
+            waiting = {}
+            for i, n in sorted(b["map"].items(), key=lambda x: int(x[0])):
+                i, n = int(i), int(n)
+                if str(n) in led["adopted"]:
+                    continue
+                state = jobs[str(i)]["State"]
+                src = f"{src_base}/{i // 1000:04d}/MiniAOD_{i}.root" if src_base else None
+                if state != "finished" or not src or not xrd_exists(src):
+                    waiting[state] = waiting.get(state, 0) + 1
+                    continue
+                dst_dir = f"{dst_base}/{n // 1000:04d}"
+                dst = f"{dst_dir}/MiniAOD_{n}.root"
+                if xrd_exists(dst):
+                    sys.exit(f"   {dst} exists already: not moving {src}")
+                events = file_events(src)
+                problems = recovery.check_numbering(events, n, E)
+                if problems:
+                    print(f"   r{k} job {i} -> {n}: NOT adopted: {'; '.join(problems)}")
+                    continue
+                if args.dryrun:
+                    print(f"   r{k} job {i} -> {n}: {len(events)} events, numbering OK; would move to {dst}")
+                    continue
+                rc, out, err = xrd("mkdir", "-p", dst_dir)
+                rc, out, err = xrd("mv", src, dst)
+                if rc or not xrd_exists(dst) or xrd_exists(src):
+                    sys.exit(f"   moving {src} -> {dst} failed: {err.strip()}")
+                led["adopted"][str(n)] = {"batch": b["request"], "job": i, "from": src, "to": dst,
+                                          "events": len(events), "time": recovery.now()}
+                recovery.save(WORK, name, led)
+                print(f"   r{k} job {i} -> MiniAOD_{n}.root: {len(events)} events, numbering OK, moved")
+                if not checked:  # provenance of the first adopted file
+                    cmd_check(argparse.Namespace(file=EOS_URL + dst, chain=chain))
+                    checked = True
+            left = [n for n in b["map"].values() if str(n) not in led["adopted"]]
+            if not left:
+                b["state"] = "done"
+                recovery.save(WORK, name, led)
+            print(f"   r{k}: {len(b['map']) - len(left)}/{len(b['map'])} adopted"
+                  + (f"; waiting {waiting}" if waiting else ""))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -389,6 +636,8 @@ def main():
     p = sub.add_parser("test"); p.add_argument("sample"); p.add_argument("-n", type=int, default=40)
     p.set_defaults(f=cmd_test)
     p = sub.add_parser("jobtest"); p.add_argument("sample"); p.add_argument("-n", type=int, default=40)
+    p.add_argument("--as-job", type=int, default=0, metavar="N",
+                   help="run as a recovery job standing in for original job N")
     p.set_defaults(f=cmd_jobtest)
     p = sub.add_parser("check"); p.add_argument("file"); p.add_argument("chain", choices=list(P.CHAINS))
     p.set_defaults(f=cmd_check)
@@ -399,6 +648,13 @@ def main():
         p = sub.add_parser(cmd); p.add_argument("samples", nargs="*")
         p.add_argument("--pilot", action="store_true", help="the pilot task instead of the full one")
         p.set_defaults(f=f)
+    p = sub.add_parser("recover"); p.add_argument("sample")
+    p.add_argument("--kill", action="store_true", help="kill the original task (first step)")
+    p.add_argument("--dryrun", action="store_true", help="plan and write the configs, submit nothing")
+    p.set_defaults(f=cmd_recover)
+    p = sub.add_parser("adopt"); p.add_argument("samples", nargs="*")
+    p.add_argument("--dryrun", action="store_true", help="check the files, move nothing")
+    p.set_defaults(f=cmd_adopt)
     args = ap.parse_args()
     args.f(args)
 

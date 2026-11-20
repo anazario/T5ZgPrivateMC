@@ -46,6 +46,7 @@ import sys
 import tarfile
 
 import production as P
+import recovery
 
 ROOT = os.path.dirname(os.path.realpath(__file__))
 WORK = os.path.join(ROOT, "work")
@@ -176,10 +177,12 @@ def mini_files(name, chain, point, ct, era):
     jobs = st.get("jobs")
     if not jobs:
         sys.exit(f"{name}: crab status returned no per-job states")
-    finished = sorted(int(j) for j, v in jobs.items() if v["State"] == "finished")
+    # jobs rerun by a recovery task (tmc.py recover/adopt) count once their file was adopted
+    adopted = recovery.adopted_jobs(WORK, name)
+    finished = sorted({int(j) for j, v in jobs.items() if v["State"] == "finished"} | adopted)
     other = {}
-    for v in jobs.values():
-        if v["State"] != "finished":
+    for j, v in jobs.items():
+        if v["State"] != "finished" and int(j) not in adopted:
             other[v["State"]] = other.get(v["State"], 0) + 1
     base = f"{P.OUT_LFN_BASE}/{P.sample_name(point, ct, era)}/{P.CHAINS[chain]['tag']}_{P.VERSION}"
     stamps = [s for s in eos_ls(base) if s[:6].isdigit()]

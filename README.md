@@ -120,6 +120,39 @@ sites. Failed jobs are recovered with `crab resubmit`.
 * **Random segfaults at MIT, not understood:** crashes at a different place in CMSSW each time,
   22 of 25 at MIT on 21 nodes, also with the xrootd fix. 2018 FastSim no longer runs at MIT.
 
+## Hung jobs and recovery tasks (Nov 2026)
+
+Some jobs hang until the wall-clock limit (exit 50664) while good jobs finish in ≤1.5 h (2018
+FastSim). The logs show three places: after step 1 has processed all events, printed its
+summary and written its job report, cmsRun never exits (the last lines are xrootd
+`Forcing error on disconnect` messages, 2018 FastSim, also at Wisconsin and UCSD); before cmsRun
+starts (two jobs on one bad Wisconsin node); at the start of step 1, before the first event
+(2022 FastSim). Resubmits of 2018 FastSim use `--maxjobruntime=240`.
+
+When a sample's last jobs keep hanging, kill the task and rerun only the unfinished jobs:
+
+```
+./tmc.py recover SAMPLE --kill    # refuses while a job is transferring its output
+./tmc.py recover SAMPLE           # once crab status shows no idle/running jobs: batch r<k>
+./tmc.py adopt [SAMPLE ...]       # move finished recovery files into the original directory
+```
+
+* **Same numbering:** recovery job i ships `recover.txt` ("i N events_per_job"), and
+  `run_chain.sh` sets `firstLuminosityBlock = N` and `firstEvent = (N-1)*E+1` in `PSet.py`, so
+  the file is what original job N would have written (run 1, lumi N). Both parameters are
+  untracked: the PSetIDs don't change. Random seeds are new, as for any job.
+* **Same job:** same configs, cores and memory; output dataset tag `<tag>_v1_r<k>`;
+  `maxJobRuntimeMin` = 2.5 × the longest good job, at least 240; the chain's whitelist.
+* **Ledger:** `work/<sample>/recovery.json` lists each batch's map (recovery job → original
+  job) and every adopted file. `recover` skips jobs that are finished, adopted or in an open
+  batch, and stops if EOS already holds a file for a job CRAB doesn't count as finished.
+* **Adopt:** a finished recovery file is moved only if it holds run 1, only lumi N, events
+  inside (N-1)*E+1 … N*E, no duplicates, and `MiniAOD_<N>.root` doesn't exist yet. It becomes
+  `<original timestamp>/0000/MiniAOD_<N>.root`; the provenance of the first adopted file per
+  batch is printed. Nothing is deleted.
+* `ntuple.py` counts adopted jobs as finished, so a recovered sample is complete when all its
+  files are in place.
+
 ## Ntuples (`ntuple.py`)
 
 KUCMSNtupleizer (`test/llpgana_miniaod.py`) runs over the MiniAOD in its own CMSSW_15_1_0_patch5 area

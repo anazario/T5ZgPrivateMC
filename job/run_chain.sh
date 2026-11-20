@@ -2,7 +2,8 @@
 # CRAB scriptExe: run the whole GEN -> MiniAOD chain of one sample inside one job.
 #
 # Step 1 is CRAB's own PSet.py (psetName with per-job seeds, event count and first lumi
-# applied by CRAB).  The remaining steps are listed in chain.txt, one per line:
+# applied by CRAB; in recovery tasks also recover.txt, see below).  The remaining steps are
+# listed in chain.txt, one per line:
 #     <step> <release> <scram_arch> <cfg> <input file to delete afterwards, unless step 1 wrote it>
 # Steps in another release set that release up from CVMFS on the worker node.
 # Only MiniAOD.root is staged out (config.JobType.outputFiles).
@@ -23,6 +24,30 @@ echo "=== sandbox release ${CMSSW_VERSION} (${SCRAM_ARCH})"
 cat chain.txt
 
 stamp() { date +%s; }
+
+# Recovery tasks (tmc.py recover) ship recover.txt, lines "<crab job> <original job> <events per
+# job>".  The job then numbers its lumi and events as CRAB numbers the original job (lumi N, events
+# (N-1)*E+1 ...), so its MiniAOD can replace the lost file.  Both parameters are untracked: the
+# PSetIDs are unchanged.  Regular tasks don't ship recover.txt.
+if [ -f recover.txt ]; then
+  read -r ORIG EPJ <<< "$(awk -v j="${JOB}" '$1 == j {print $2, $3}' recover.txt)"
+  if [ -z "${ORIG}" ] || [ -z "${EPJ}" ]; then
+    echo "=== recover.txt has no entry for job ${JOB}"
+    exit 95
+  fi
+  FIRST=$(( (ORIG - 1) * EPJ + 1 ))
+  cat >> PSet.py <<PY
+
+# --- run_chain.sh: recovery job ${JOB} stands in for original job ${ORIG}
+import FWCore.ParameterSet.Config as cms
+for _name, _value in (("firstLuminosityBlock", ${ORIG}), ("firstEvent", ${FIRST})):
+    if hasattr(process.source, _name):
+        getattr(process.source, _name).setValue(_value)
+    else:
+        setattr(process.source, _name, cms.untracked.uint32(_value))
+PY
+  echo "=== recovery job ${JOB}: numbered as original job ${ORIG} (lumi ${ORIG}, first event ${FIRST})"
+fi
 
 # Log the seeds CRAB put into PSet.py (it doesn't), so that a failed job can be reproduced.
 # 10_X releases have python 2 only; a system python3 there can't import FWCore and falls through.
