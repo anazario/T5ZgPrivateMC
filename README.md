@@ -97,8 +97,10 @@ GEN/SIM IDs that contain the generator config differ by mass point and lifetime.
 Physics checks on the MiniAOD (run in any python3 FWLite release, e.g. CMSSW_13_0_13):
 
 * `validate/gencheck.py <files>`: 2 gluinos and 2 N2 per event, masses, gluino -> q qbar N2
-  flavours, N2 -> N1 γ / N1 Z at 50/50 (1:2:1 per event), Z decays vs PDG, and the N2 proper decay
-  length vs cτ. Masses and cτ are read from the file path.
+  flavours, the N2 decays of the model and the N2 proper decay length vs cτ. T5Zg: N2 -> N1 γ / N1 Z
+  at 50/50 (1:2:1 per event), Z decays vs PDG. T5HH: N2 -> N1 h always, h decays vs Pythia's SM
+  table (off-shell h*: printed only). Model, masses and cτ are read from the file path;
+  `--label genParticles` reads GEN/GEN-SIM files.
 * `validate/pucheck.py <files from different jobs>`: the in-time pileup of event i must differ
   between jobs.
 
@@ -212,6 +214,38 @@ KUCMSNtupleizer (`test/llpgana_miniaod.py`) runs over the MiniAOD in its own CMS
   packages: 2.6 MB, nothing deleted from the area. Each submission checks the tarball.
 * **Local test (Nov 2026):** all 4 chains on 2 full MiniAOD files each: exit 0, 3–7 min and
   1.3–1.6 GB per file, `nTotEvts` equal to the input events.
+
+## T5HH samples (`samples/t5hh.py`)
+
+The T5Zg points and lifetimes with χ̃⁰₂ → χ̃⁰₁ h (BR 1) instead of γ/Z (CMS SMS name T5HH), FullSim
+only, 2018 and 2022: 12 tasks of 375 jobs, output in `/store/user/aabreuna/T5HHPrivateMC`, work
+directory `work/t5hh/`, ntuples in `kucmsntuple_SMS_T5HH_SVHPM100_FullMini_<version>`.
+
+| Point (mGo, mN2, mN1) | cτ(χ̃⁰₂) | 2018 FullSim | 2022 FullSim |
+|---|---|---|---|
+| 1800, 1750, 1700 (compressed, off-shell h) | 0.1, 20, 300 cm | new | new |
+| 2300, 1200, 1000 (high Δm) | 0.1, 20, 300 cm | new | new |
+
+* **Fragments:** `fragments/Template_T5HH_*` are the T5Zg templates with the N2 decay table
+  replaced, and the same gridpacks (they contain only p p > g̃ g̃ + jets). The h decays with
+  Pythia's default SM branching ratios.
+* **Off-shell h (Δm < 125 GeV):** as for the off-shell Z, a BR-0 dummy three-body line keeps the
+  N2 unstable. In addition, Pythia's SLHA reader switches off a decay that is "too far off shell"
+  (more than 100 widths), and `Higgs:clipWings` would clip the h line shape to m₀ ± 50 Γ. The
+  template therefore sets a temporary `25:mWidth = (125 − Δm)/50` (Pythia replaces it with its
+  calculated 4.08 MeV at resonance initialisation), `Higgs:clipWings = off` and `25:mMin = 0.1`.
+  The h* then decays with branching ratios recomputed at its mass (mostly bb at ~30 GeV).
+* **GEN-only test (Nov 2026, LPC condor, 25 × 800 LHE events per configuration):** both points, both
+  eras, ~5.5k events each. Every N2 → N1 h; at the high-Δm point all h decays (incl. ZZ, γγ, Zγ)
+  agree with Pythia's table within 2.5σ; nothing left undecayed; N2 c·t = 20.0 ± 0.2 cm; matching
+  efficiency 0.26–0.30. At the compressed point m(h*) runs 0.2–50 GeV (median 32 GeV) and follows
+  Pythia's fixed-width Breit-Wigner × phase space, softer than a running-width s·β³ shape (median
+  ~40 GeV). Accepted as the standard treatment; a Δm = 100 GeV point may follow (same gridpack).
+
+```bash
+export TMC_SAMPLES=samples/t5hh.py
+./tmc.py setup && ./tmc.py configs && ./tmc.py test T5HH_mGo-2300_mN2-1200_mN1-1000_N2ctau-20cm_2022_FullMini -n 40
+```
 
 ## iDM samples (`samples/idm.py`)
 
