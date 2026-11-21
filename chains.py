@@ -1,9 +1,13 @@
-"""Single source of truth: which samples to make and how.
+"""How samples are produced: sites, releases, premix libraries and the processing chains.
+
+This file knows nothing about what is generated.  The samples come from a sample set (samples/,
+see sampleset.py), which names a chain from CHAINS for each sample and supplies its fragment.
 
 Every cmsDriver command below is copied from the CRAB debug configs of the existing
 T5Zg productions (janguian's crabsubmit areas, Sep 2026), which in turn reproduce the
 processing history stored in the existing MiniAOD (edmProvDump).  The only intended
 difference is the 2022 FullSim PAT step, which no longer uses --fast (see README).
+The 2024 chain is the central RunIII2024Summer24 one (Nov 2026).
 
 Placeholders, filled per sample by tmc.py:
   {frag}   fragment module name in Configuration/GenProduction/python (without .py)
@@ -11,8 +15,7 @@ Placeholders, filled per sample by tmc.py:
 import os
 
 # --------------------------------------------------------------------------- output
-# CRAB requires the CERN username here; on cmseos /store/user/aabreuna is a link to .../anazario
-OUT_LFN_BASE = "/store/user/aabreuna/T5ZgPrivateMC"
+# Where every sample set's output goes (each set has its own OUT_LFN_BASE under /store/user)
 STORAGE_SITE = "T3_US_FNALLPC"
 # Sites whose temporary storage FNAL EOS could not pull from in the Nov 2026 pilots: every
 # ASO transfer to T3_US_FNALLPC failed with "copy HTTP 500" (exit 60328) after the job had
@@ -35,39 +38,8 @@ SITES_WORLD = SITES_US + [
     "T2_UK_London_IC", "T2_UK_SGrid_RALPP", "T2_FR_GRIF", "T2_ES_CIEMAT", "T2_BE_IIHE",
     "T2_EE_Estonia",
 ]
-VERSION = "v1"  # goes into the CRAB dataset tag; bump for a new production round
-
-# --------------------------------------------------------------------------- samples
-# (mGo, mN2, mN1) in GeV, cτ(N2) in cm, era, chain
-COMPRESSED = (1800, 1750, 1700)
-HIGH_DM = (2300, 1200, 1000)
-
-SAMPLES = (
-    # 2018 FullSim of the compressed point (only 2022 exists)
-    [(COMPRESSED, ct, "2018", "2018_full") for ct in (0.1, 20, 300)]
-    # high-Δm: the missing lifetimes in both eras (300 cm exists in both)
-    + [(HIGH_DM, ct, era, f"{era}_full") for era in ("2018", "2022") for ct in (0.1, 20)]
-    # redo of the existing 2022 FullSim samples, whose MiniAOD used the FastSim PAT config
-    + [(COMPRESSED, ct, "2022", "2022_full") for ct in (0.1, 20, 300)]
-    + [(HIGH_DM, 300, "2022", "2022_full")]
-    # 2022 FastSim companions of all 2022 points
-    + [(pt, ct, "2022", "2022_fast") for pt in (COMPRESSED, HIGH_DM) for ct in (0.1, 20, 300)]
-    # 2018 FastSim companions of all 2018 points
-    + [(pt, ct, "2018", "2018_fast") for pt in (COMPRESSED, HIGH_DM) for ct in (0.1, 20, 300)]
-)
 
 # --------------------------------------------------------------------------- inputs
-FRAGMENT_TEMPLATE = {  # in fragments/; XXXX/YYYY/ZZZZ = masses, TTTT = cτ in cm (as "%f")
-    "2022": "Template_T5Zg_13p6TeV_fragment.py",
-    "2018": "Template_T5Zg_13TeV_fragment.py",
-}
-# janguian's gridpacks_central has no slc7 (2018) gridpack for mGo = 1800.  Ours was built with
-# genproductions mg265UL from his 2300 slc7 cards with only the gluino mass changed (Nov 2026).
-GRIDPACK_OVERRIDE = {  # (era, mGo) -> gridpack replacing the template's path
-    ("2018", 1800): "root://cmseos.fnal.gov//store/user/aabreuna/gridpacks/"
-                    "T5Zg_mGo-1800_slc7_amd64_gcc700_CMSSW_10_6_44_tarball.tar.xz",
-}
-
 PREMIX_2022_FULL = "dbs:/Neutrino_E-10_gun/Run3Summer21PrePremix-Summer22_124X_mcRun3_2022_realistic_v11-v2/PREMIX"
 PREMIX_2018_FULL = "dbs:/Neutrino_E-10_gun/RunIISummer20ULPrePremix-UL18_106X_upgrade2018_realistic_v11_L1v1-v2/PREMIX"
 # Justin's private 2022 FastSim premix library "PUlib1": 10 files x 10k events
@@ -95,6 +67,11 @@ R2018_HLT = ("CMSSW_10_2_16_UL", "slc7_amd64_gcc700")
 R2018_PAT = ("CMSSW_10_6_27", "slc7_amd64_gcc700")
 R2018_FAST = ("CMSSW_10_6_35_patch1", "slc7_amd64_gcc700")    # central UL18 FastSim (SMS-T5Wg provenance)
 R2018_FASTPAT = ("CMSSW_10_6_29", "slc7_amd64_gcc700")
+# 2024 FullSim: the central RunIII2024Summer24 StepChain (McM EXO-RunIII2024Summer24GS-00793,
+# DRPremix-03345, MiniAODv6-03195, from ReqMgr2 and McM get_setup, Nov 2026)
+R2024_GEN = ("CMSSW_14_0_22", "el8_amd64_gcc12")
+R2024_PAT = ("CMSSW_15_0_17", "el8_amd64_gcc12")
+PREMIX_2024_FULL = "dbs:/Neutrino_E-10_gun/RunIIISummer24PrePremix-Premixlib2024_140X_mcRun3_2024_realistic_v26-v1/PREMIX"
 
 MON = "--customise Configuration/DataProcessing/Utils.addMonitoring"
 
@@ -249,29 +226,45 @@ CHAINS = {
             "PAT": "1d31bd42d1d45aa3ad7364946c5ce28f",   # central SMS-T5Wg UL18 FastSim MiniAODv2
         },
     },
+    # The central 2024 chain with LHE in step 1 (central: GEN,SIM from a GS request).
+    "2024_full": {
+        "tag": "FullMini",
+        # jobtest (Nov 2026): 2 threads, 40 events: premix DIGI+HLT peaks at 4.8 GB, at CRAB's
+        # 5000 MB for 2 cores.  4 threads, 200 events: peak 6.9 GB (DIGI+HLT), 992 s for 195 MiniAOD
+        # events, i.e. ~250 s + 3.9 s per LHE event: 1000 LHE events = ~1.2 h, ~975 MiniAOD events
+        # (97% matching efficiency).  numberOfThreads is untracked: PSetIDs unchanged.
+        "events_per_job": 1000,
+        "total_events": 50000,
+        "threads": 4,
+        "max_memory_mb": 10000,
+        "whitelist": SITES_WORLD,
+        # edmProvDump/edmFileUtil of 15_0 files: use the PAT release
+        "tools_release": R2024_PAT,
+        "steps": [
+            step(R2024_GEN,
+                "Configuration/GenProduction/python/{frag}.py --eventcontent RAWSIM,LHE " + MON +
+                " --datatier GEN-SIM,LHE --conditions 140X_mcRun3_2024_realistic_v26 --beamspot DBrealistic"
+                " --customise_commands 'process.RandomNumberGeneratorService.externalLHEProducer.initialSeed=int(123456)"
+                "\\nprocess.source.numberEventsInLuminosityBlock=cms.untracked.uint32(250)'"
+                " --step LHE,GEN,SIM --geometry DB:Extended --era Run3_2024 --mc"),
+            step(R2024_GEN,
+                "--eventcontent PREMIXRAW " + MON + " --datatier GEN-SIM-RAW"
+                f" --pileup_input {PREMIX_2024_FULL} --conditions 140X_mcRun3_2024_realistic_v26"
+                " --step DIGI,DATAMIX,L1,DIGI2RAW,HLT:2024v14 --procModifiers premix_stage2"
+                " --geometry DB:Extended --datamix PreMix --era Run3_2024 --mc"),
+            step(R2024_GEN,
+                "--eventcontent AODSIM " + MON + " --datatier AODSIM --conditions 140X_mcRun3_2024_realistic_v26"
+                " --step RAW2DIGI,L1Reco,RECO,RECOSIM --geometry DB:Extended --era Run3_2024 --mc"),
+            step(R2024_PAT,
+                "--eventcontent MINIAODSIM1 " + MON + " --datatier MINIAODSIM --conditions 150X_mcRun3_2024_realistic_v2"
+                " --step PAT --geometry DB:Extended --era Run3_2024 --mc"),
+        ],
+        # central RunIII2024Summer24MiniAODv6 splitSUSY_Par-ctau-1p0-MG-1400-MN-100 (edmProvDump,
+        # Nov 2026); SIM contains the generator config and differs by sample
+        "expected_psetids": {
+            "HLT": "a86c82c9c82fe2706792e8367cc5d80a",
+            "RECO": "f66803e28e50dd440f77aeadd5129db0",
+            "PAT": "047becb7b38c7a99b08b102e1348af09",
+        },
+    },
 }
-
-
-# --------------------------------------------------------------------------- naming
-def ctau_str(ct):
-    """0.1 -> '0p1', 20 -> '20' (the convention of the existing samples)."""
-    return f"{ct:g}".replace(".", "p")
-
-
-def sample_name(point, ct, era):
-    mgo, mn2, mn1 = point
-    return f"T5Zg_mGo-{mgo}_mN2-{mn2}_mN1-{mn1}_N2ctau-{ctau_str(ct)}cm_{era}"
-
-
-def fragment_name(point, ct, era):
-    mgo, mn2, mn1 = point
-    energy = "13p6TeV" if era == "2022" else "13TeV"
-    return f"T5Zg_mGo-{mgo}_mN2-{mn2}_mN1-{mn1}_N2ctau-{ctau_str(ct)}cm_{energy}_fragment"
-
-
-def samples():
-    """[(name, chain_key, point, ct, era)] with the chain tag appended to the name."""
-    out = []
-    for point, ct, era, chain in SAMPLES:
-        out.append((f"{sample_name(point, ct, era)}_{CHAINS[chain]['tag']}", chain, point, ct, era))
-    return out

@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """KUCMSNtupleizer CRAB tasks over the MiniAOD made by tmc.py, submitted in batches.
 
+The private samples are those of a sample set (sampleset.py): samples/t5zg.py unless
+--samples FILE or $TMC_SAMPLES, as for tmc.py.  The set must define NTUPLE_MODEL.
+
 Needs cmsenv in the KUCMSNtupleizer area and crab-setup.sh.  Without them ntuple.py re-runs
 itself in a shell that sets both up (ensure_env): the area is $KUCMS_AREA, or else the
 NTUPLE_RELEASE area next to this directory (../NTUPLE_RELEASE or ../*/NTUPLE_RELEASE).
 
+  ./ntuple.py [--samples FILE] COMMAND ...
   ./ntuple.py status [samples]            MiniAOD files finished / submitted / still to submit,
                                           and the job states of every ntuple batch
   ./ntuple.py submit [--dryrun] [samples] submit samples whose MiniAOD task is complete, as a new
@@ -27,7 +31,7 @@ Central samples (--inputs FILE, e.g. inputs/splitSUSY_UL18.txt)
 Book-keeping
   * Whole samples only: submit skips a sample until every job of its MiniAOD task has finished,
     so each sample's ntuples normally come from one batch.  --partial overrides this.
-  * Each sample has a ledger, work/<sample>/ntuple/ledger.json, listing every batch (CRAB request
+  * Each sample has a ledger, <work>/<sample>/ntuple/ledger.json, listing every batch (CRAB request
     name, MiniAOD files, state "dryrun", "submitted" or "killed").  submit takes the MiniAOD
     task's finished jobs, removes files of non-killed batches and submits the rest as batch b<k>,
     so a file is never submitted twice and none is skipped.
@@ -36,8 +40,8 @@ Book-keeping
   * All batches of a sample write to the same dataset tag, in the collection layout that
     KUCMSSkimmer/condor/skim_submit.py expects (it takes the tier from the collection name and
     the sample from the task directory, <collection>_<sample>):
-    <OUT_LFN_BASE>/kucmsntuple_SMS_T5Zg_SVHPM100_<FullMini|FastMini>_v38/<sample>/
-        kucmsntuple_SMS_T5Zg_SVHPM100_<FullMini|FastMini>_v38_<sample>/<timestamp per batch>/
+    <OUT_LFN_BASE>/kucmsntuple_SMS_<NTUPLE_MODEL>_SVHPM100_<FullMini|FastMini>_v38/<sample>/
+        kucmsntuple_SMS_<NTUPLE_MODEL>_SVHPM100_<FullMini|FastMini>_v38_<sample>/<timestamp per batch>/
 
 Sandbox
   The KUCMSNtupleizer area also holds HiggsAnalysis/CombinedLimit (313 MB in its data/),
@@ -59,17 +63,18 @@ import subprocess
 import sys
 import tarfile
 
-import production as P
+import chains as C
 import recovery
+import sampleset
 
 ROOT = os.path.dirname(os.path.realpath(__file__))
-WORK = os.path.join(ROOT, "work")
+S = None     # the sample set (main); its work directory is S.work, its output S.out_lfn_base
 EOS = "root://cmseos.fnal.gov/"
 
 # --------------------------------------------------------------------------- settings
 NTUPLE_VERSION = "v38"   # KUCMSNtupleizer version printed by the group's multicrab scripts
 NTUPLE_TAG = f"KUCMSNtuple_SVHPM100_{NTUPLE_VERSION}"  # dataset tag and request-name stem
-NTUPLE_LFN_BASE = P.OUT_LFN_BASE  # next to the MiniAOD (private area, no clash with group ntuples)
+# Output: the sample set's OUT_LFN_BASE, next to its MiniAOD (private area, no clash with group ntuples)
 # Tasks submitted before Nov 19 2026 wrote <OUT_LFN_BASE>/<sample>/KUCMSNtuple_SVHPM100_v38_
 # <Fast|Full>Mini_v1/<timestamp>/; their outputs were moved into the collections below.
 NTUPLE_RELEASE = "CMSSW_15_1_0_patch5"  # the KUCMSNtupleizer area; $KUCMS_AREA overrides
@@ -80,7 +85,7 @@ MAX_MEMORY_MB = 2500
 # Inputs are on cmseos; the T2s read them over xrootd.  FNALLPC alone ran none of the b1 jobs in
 # an hour (and none of ~6400 MiniAOD jobs that listed it), so the US T2s whose stage-out to
 # FNAL works are added (Nov 2026).
-WHITELIST = P.SITES_US
+WHITELIST = C.SITES_US
 
 COMMON = ["multicrab=True", "hasGenInfo=True", "eventFilter=SVHPMet100"]
 ERA_PARAMS = {
@@ -149,11 +154,19 @@ def read_inputs(path):
     return out
 
 
+class Central:
+    """A central sample: name, chain CENTRAL, era and its input record (read_inputs)."""
+    chain = CENTRAL
+
+    def __init__(self, name, inp):
+        self.name, self.inp, self.era = name, inp, inp["era"]
+
+
 def central_samples(inputs_file=None):
-    """(work name, CENTRAL, input record, None, era) of the central samples: those with a
-    ledger (recorded at submission) and those of the --inputs file."""
+    """The central samples: those with a ledger (recorded at submission) and those of the
+    --inputs file."""
     found = {}
-    for path in glob.glob(os.path.join(WORK, "*", "ntuple", "ledger.json")):
+    for path in glob.glob(os.path.join(S.work, "*", "ntuple", "ledger.json")):
         led = json.load(open(path))
         if "input" in led:
             found[led["sample"]] = led["input"]
@@ -162,17 +175,19 @@ def central_samples(inputs_file=None):
             if name in found and found[name] != inp:
                 sys.exit(f"{name}: --inputs gives {inp}, its ledger records {found[name]}")
             found[name] = inp
-    return [(name, CENTRAL, inp, None, inp["era"]) for name, inp in sorted(found.items())]
+    return [Central(name, inp) for name, inp in sorted(found.items())]
 
 
 def tier_of(chain, inp=None):
-    return inp["tier"] if chain == CENTRAL else P.CHAINS[chain]["tag"]
+    return inp["tier"] if chain == CENTRAL else C.CHAINS[chain]["tag"]
 
 
 def collection(chain, inp=None):
     """kucmsntuple_* collection of a chain: one per tier, both eras (skim_submit.py reads the
     tier from this name and the year from the sample name)."""
-    model = f"SMS_{inp['model']}" if chain == CENTRAL else "SMS_T5Zg"
+    if chain != CENTRAL and not S.ntuple_model:
+        sys.exit(f"sample set {S.path} has no NTUPLE_MODEL: no ntuples for its samples")
+    model = f"SMS_{inp['model']}" if chain == CENTRAL else f"SMS_{S.ntuple_model}"
     return f"kucmsntuple_{model}_SVHPM100_{tier_of(chain, inp)}_{NTUPLE_VERSION}"
 
 
@@ -186,21 +201,26 @@ def select(patterns, inputs_file=None):
     pool = central_samples(inputs_file)
     if inputs_file:
         names = set(read_inputs(inputs_file))
-        pool = [s for s in pool if s[0] in names]
+        pool = [s for s in pool if s.name in names]
     else:
-        pool = P.samples() + pool
-    out = [s for s in pool if not patterns or any(fnmatch.fnmatch(s[0], p) for p in patterns)]
+        pool = S.samples + pool
+    out = [s for s in pool if not patterns or any(fnmatch.fnmatch(s.name, p) for p in patterns)]
     if not out:
         sys.exit(f"no sample matches {patterns}")
     return out
 
 
 def mini_project(name):
-    return os.path.join(WORK, name, "crab_projects", f"crab_{name}_{P.VERSION}")
+    return os.path.join(S.work, name, "crab_projects", f"crab_{name}_{S.version}")
+
+
+def mini_base(s):
+    """EOS directory of a private sample's MiniAOD task (above its timestamp directory)."""
+    return f"{S.out_lfn_base}/{s.dataset}/{C.CHAINS[s.chain]['tag']}_{S.version}"
 
 
 def ntuple_dir(name):
-    return os.path.join(WORK, name, "ntuple")
+    return os.path.join(S.work, name, "ntuple")
 
 
 def batch_project(name, request):
@@ -314,20 +334,21 @@ def ledger_files(ledger):
 
 
 # --------------------------------------------------------------------------- MiniAOD inputs
-def mini_files(name, chain, point, ct, era):
+def mini_files(s):
     """(LFNs of finished jobs, number of jobs, {state: count} of unfinished jobs)."""
+    name = s.name
     st = crab("status", dir=mini_project(name))
     jobs = st.get("jobs")
     if not jobs:
         sys.exit(f"{name}: crab status returned no per-job states")
     # jobs rerun by a recovery task (tmc.py recover/adopt) count once their file was adopted
-    adopted = recovery.adopted_jobs(WORK, name)
+    adopted = recovery.adopted_jobs(S.work, name)
     finished = sorted({int(j) for j, v in jobs.items() if v["State"] == "finished"} | adopted)
     other = {}
     for j, v in jobs.items():
         if v["State"] != "finished" and int(j) not in adopted:
             other[v["State"]] = other.get(v["State"], 0) + 1
-    base = f"{P.OUT_LFN_BASE}/{P.sample_name(point, ct, era)}/{P.CHAINS[chain]['tag']}_{P.VERSION}"
+    base = mini_base(s)
     stamps = [s for s in eos_ls(base) if s[:6].isdigit()]
     if len(stamps) != 1:
         sys.exit(f"{name}: expected one task directory in {base}, found {stamps}")
@@ -406,8 +427,8 @@ def crab_config(name, chain, era, request, sample, splitting, units, inp=None):
     c.Data.unitsPerJob = units
     c.Data.publication = False
     c.Data.outputDatasetTag = f"{collection(chain, inp)}_{sample}"
-    c.Data.outLFNDirBase = f"{NTUPLE_LFN_BASE}/{collection(chain, inp)}"
-    c.Site.storageSite = P.STORAGE_SITE
+    c.Data.outLFNDirBase = f"{S.out_lfn_base}/{collection(chain, inp)}"
+    c.Site.storageSite = C.STORAGE_SITE
     c.Site.whitelist = WHITELIST
     return c
 
@@ -463,16 +484,17 @@ def cmd_submit(args):
             os.path.join(os.environ["CMSSW_BASE"], "src/KUCMSNtupleizer")):
         sys.exit("cmsenv in the KUCMSNtupleizer area first")
     install_slim_sandbox()
-    for name, chain, point, ct, era in select(args.samples, args.inputs):
+    for s in select(args.samples, args.inputs):
+        name, chain, era = s.name, s.chain, s.era
         print(f"== {name}")
         ledger = load_ledger(name)
         if any(b["state"] == "dryrun" for b in ledger["batches"]):
             print("   a --dryrun batch is waiting for `proceed`; skipping")
             continue
-        if chain == CENTRAL:  # point = input record
-            submit_central(args, name, point, ledger)
+        if chain == CENTRAL:
+            submit_central(args, name, s.inp, ledger)
             continue
-        lfns, njobs, other = mini_files(name, chain, point, ct, era)
+        lfns, njobs, other = mini_files(s)
         new = [l for l in lfns if l not in ledger_files(ledger)]
         print(f"   MiniAOD {len(lfns)}/{njobs} finished {other or ''}; already submitted "
               f"{len(lfns) - len(new)}; new {len(new)}")
@@ -489,7 +511,7 @@ def cmd_submit(args):
             f.write("\n".join(new) + "\n")
         print(f"   batch {request}: {(len(new) + FILES_PER_JOB - 1) // FILES_PER_JOB} jobs; "
               f"{' '.join(py_cfg_params(chain, era))}")
-        sample = P.sample_name(point, ct, era)
+        sample = s.dataset
         cfg = crab_config(name, chain, era, request, sample, "FileBased", FILES_PER_JOB)
         cfg.Data.userInputFiles = [EOS + l for l in open(filelist).read().split()]
         cfg.Data.outputPrimaryDataset = sample
@@ -497,7 +519,8 @@ def cmd_submit(args):
 
 
 def cmd_proceed(args):
-    for name, chain, point, ct, era in select(args.samples, args.inputs):
+    for s in select(args.samples, args.inputs):
+        name = s.name
         ledger = load_ledger(name)
         for b in ledger["batches"]:
             if b["state"] == "dryrun":
@@ -520,13 +543,14 @@ def cmd_killed(args):
 
 def cmd_status(args):
     tot = {"mini": 0, "submitted": 0, "todo": 0}
-    for name, chain, point, ct, era in select(args.samples, args.inputs):
+    for s in select(args.samples, args.inputs):
+        name = s.name
         ledger = load_ledger(name)
         done = ledger_files(ledger)
-        if chain == CENTRAL:
-            print(f"{name:60s} DAS input        submitted {len(done):3d}  {point['dataset'].split('/')[2]}")
+        if s.chain == CENTRAL:
+            print(f"{name:60s} DAS input        submitted {len(done):3d}  {s.inp['dataset'].split('/')[2]}")
         else:
-            lfns, njobs, other = mini_files(name, chain, point, ct, era)
+            lfns, njobs, other = mini_files(s)
             todo = len([l for l in lfns if l not in done])
             tot["mini"] += len(lfns); tot["submitted"] += len(done); tot["todo"] += todo
             print(f"{name:60s} MiniAOD {len(lfns):3d}/{njobs:3d}  submitted {len(done):3d}  to submit {todo:3d}")
@@ -543,7 +567,11 @@ def cmd_status(args):
 
 
 def main():
+    global S
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    # dest sample_set: the subcommands' positional "samples" (name patterns) would overwrite args.samples
+    ap.add_argument("--samples", dest="sample_set", metavar="FILE",
+                    help="sample set (default: $TMC_SAMPLES, else samples/t5zg.py)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     inputs_help = "file of central MiniAOD datasets (see 'Central samples'); only its samples"
     p = sub.add_parser("status"); p.add_argument("samples", nargs="*"); p.set_defaults(f=cmd_status)
@@ -559,6 +587,7 @@ def main():
     p = sub.add_parser("proceed"); p.add_argument("samples", nargs="*"); p.set_defaults(f=cmd_proceed)
     p.add_argument("--inputs", help=inputs_help)
     args = ap.parse_args()
+    S = sampleset.load(args.sample_set)
     ensure_env()
     args.f(args)
 

@@ -5,7 +5,22 @@ BR 0.5/0.5), made with the same recipes as the existing KUCMS T5Zg samples. Each
 task, and each job runs the whole chain from GEN to MiniAOD on the worker node. Only `MiniAOD.root` is
 staged out.
 
-## Samples (`production.py`)
+The pipeline (`tmc.py`, `ntuple.py`, `recovery.py`, `job/run_chain.sh`, `chains.py`) doesn't depend
+on what is generated: its input is a **sample set**, see below. T5Zg is the default set; the iDM
+samples of [iDM-InclusiveGen](#idm-samples-samplesidmpy) go through the same machinery.
+
+## Sample sets (`sampleset.py`, `samples/`)
+
+| File | What it owns |
+|---|---|
+| `chains.py` | how samples are produced: sites, releases, premix, the chains (cmsDriver steps, threads, memory, expected PSetIDs) |
+| `samples/<set>.py` | what is produced: for every sample its CRAB dataset name, chain, fragment and era, plus the set's output directory (`OUT_LFN_BASE`), production round (`VERSION`), work directory and ntuple model |
+
+`tmc.py` and `ntuple.py` take `--samples FILE` (or `$TMC_SAMPLES`); without it they use
+`samples/t5zg.py`, so every T5Zg command works as before. A set's work directory is `work/<set>/`,
+except T5Zg's, which stays `work/` (it predates sample sets). The contract is in `sampleset.py`.
+
+## T5Zg samples (`samples/t5zg.py`)
 
 | Point (mGo, mN2, mN1) | cτ(χ̃⁰₂) | 2018 FullSim | 2018 FastSim | 2022 FullSim | 2022 FastSim |
 |---|---|---|---|---|---|
@@ -43,7 +58,11 @@ history stored in the existing MiniAOD (`edmProvDump`):
   for 2022, slc7 / 10_6_44 for 2018). Fragments come from janguian's T5Zg templates in `fragments/`.
   He has no slc7 gridpack for mGo = 1800, so we built one (genproductions `mg265UL`, his 2300 slc7
   cards with only the gluino mass changed) at `/store/user/aabreuna/gridpacks/`; `GRIDPACK_OVERRIDE`
-  in `production.py` points the 2018 mGo-1800 fragments to it.
+  in `samples/t5zg.py` points the 2018 mGo-1800 fragments to it.
+* **2024 FullSim** (`2024_full`, used by the iDM set): the central RunIII2024Summer24 StepChain from
+  McM/ReqMgr2: LHE,GEN,SIM → DIGI,DATAMIX,L1,DIGI2RAW,HLT:2024v14 (Premixlib2024) →
+  RAW2DIGI,L1Reco,RECO,RECOSIM in CMSSW_14_0_22 with `140X_mcRun3_2024_realistic_v26`; then PAT
+  (MINIAODSIM1, MiniAODv6) in CMSSW_15_0_17 with `150X_mcRun3_2024_realistic_v2`. 4 threads, 10 GB.
 
 ## Usage (cmslpc-el9)
 
@@ -51,7 +70,7 @@ history stored in the existing MiniAOD (`edmProvDump`):
 cd ~/nobackup && git clone <this repo> T5ZgPrivateMC && cd T5ZgPrivateMC
 voms-proxy-init -voms cms -valid 192:00
 ./tmc.py list
-./tmc.py setup                      # creates releases/ (7 releases), installs fragments, scram b
+./tmc.py setup                      # creates releases/ (the set's chains: 7 for T5Zg), installs fragments, scram b
 ./tmc.py configs <sample>           # cmsDriver for every step -> work/<sample>/
 ./tmc.py test <sample> -n 40        # whole chain locally: time, memory, size, provenance check
 ./tmc.py submit <sample> [--pilot 5] --dryrun   # CRAB dry run; then ./tmc.py proceed <sample> [--pilot]
@@ -59,17 +78,19 @@ voms-proxy-init -voms cms -valid 192:00
 ```
 
 `<sample>` can be any unique part of the name, e.g. `2300_mN2-1200_mN1-1000_N2ctau-20cm_2022_Full`.
+Another sample set: `./tmc.py --samples samples/idm.py list` (or `export TMC_SAMPLES=samples/idm.py`).
 
 ## Validation
 
 `./tmc.py check <MiniAOD> <chain>` compares the process PSetIDs in the file with
-`expected_psetids` in `production.py`:
+`expected_psetids` in `chains.py`:
 
 * 2022 FullSim: HLT and RECO must equal the existing samples, and PAT must equal central
   Run3Summer22MiniAODv4 FullSim (`5443ed9e…`), not the old `d5d37242…`.
 * 2022 FastSim: PAT must equal the existing FastSim (`d5d37242…`).
 * 2018 FullSim: SIM, DIGI2RAW, HLT, RECO and PAT must all equal the existing 2018 sample.
 * 2018 FastSim: PAT must equal the central `SMS-T5Wg` UL18 FastSim MiniAODv2 (`1d31bd42…`).
+* 2024 FullSim: HLT, RECO and PAT must equal central RunIII2024Summer24MiniAODv6.
 
 GEN/SIM IDs that contain the generator config differ by mass point and lifetime. That is expected.
 
@@ -191,3 +212,23 @@ KUCMSNtupleizer (`test/llpgana_miniaod.py`) runs over the MiniAOD in its own CMS
   packages: 2.6 MB, nothing deleted from the area. Each submission checks the tarball.
 * **Local test (Nov 2026):** all 4 chains on 2 full MiniAOD files each: exit 0, 3–7 min and
   1.3–1.6 GB per file, `nTotEvts` equal to the input events.
+
+## iDM samples (`samples/idm.py`)
+
+Inelastic dark matter, χ₂ → χ₁ + (ee, μμ, ττ, hadrons) through an off-shell dark photon, 2024
+FullSim. The physics lives in the separate generator repository
+[**iDM-InclusiveGen**](https://github.com/anazario/iDM-InclusiveGen) (mass points,
+gridpacks with the χ₂ decayer, fragments, generator-level validation). It publishes
+`fragments/manifest.json`, which `samples/idm.py` reads; this repository decides only the chain
+(`2024_full`), the number of events and where the output goes (`/store/user/aabreuna/iDMPrivateMC`,
+work directory `work/idm/`). No ntuples yet (the set has no `NTUPLE_MODEL`).
+
+```bash
+git clone git@github.com:anazario/iDM-InclusiveGen.git ../iDM-InclusiveGen   # next to this repo, or set IDM_MANIFEST
+export TMC_SAMPLES=samples/idm.py
+./tmc.py setup && ./tmc.py configs && ./tmc.py test Mchi-3p6_dMchi-1p2_mZDinput-9p0_ctau-10mm -n 40
+```
+
+Pilots (Nov 2026, 5 jobs × 1000 LHE events at cτ = 10 mm, output under the T5Zg directory, before
+the split): Δ = 4 GeV passed all checks (4876 events, numbering, provenance MATCH, generator-level
+checks PASS, 7.3 GB peak, ~1.4 h per job).

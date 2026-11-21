@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""T5Zg private MC: set up releases, make configs, test locally, submit to CRAB.
+"""Private MC production: set up releases, make configs, test locally, submit to CRAB.
 
 Runs on a cmslpc-el9 login node with the standard library only.  Every CMSSW command is
-executed inside the container that matches the release (cmssw-el7 / cmssw-el8).
+executed inside the container that matches the release (cmssw-el7 / cmssw-el8).  What is produced
+comes from a sample set (sampleset.py): samples/t5zg.py unless --samples FILE or $TMC_SAMPLES.
 
+    ./tmc.py [--samples FILE] COMMAND ...
     ./tmc.py list
-    ./tmc.py setup                         # cmsrel the 7 releases, install fragments, scram b
-    ./tmc.py configs [SAMPLE ...]          # cmsDriver -> work/<sample>/ (all samples by default)
+    ./tmc.py setup [CHAIN ...]             # cmsrel the releases of the set's chains, install fragments, scram b
+    ./tmc.py configs [SAMPLE ...]          # cmsDriver -> <work>/<sample>/ (all samples by default)
     ./tmc.py test SAMPLE [-n 40]           # run the whole chain locally on n LHE events
     ./tmc.py jobtest SAMPLE [-n 40]        # run job/run_chain.sh as a CRAB worker node would
     ./tmc.py check FILE CHAIN              # compare MiniAOD provenance with the expected PSetIDs
@@ -29,8 +31,9 @@ import sys
 import tempfile
 import time
 
-import production as P
+import chains as C
 import recovery
+import sampleset
 
 EOS_URL = "root://cmseos.fnal.gov/"
 
@@ -38,7 +41,7 @@ EOS_URL = "root://cmseos.fnal.gov/"
 # cmssw-elX containers don't mount by default, so ROOT is bound into every container (run_in).
 ROOT = os.path.dirname(os.path.realpath(__file__))
 RELEASES = os.path.join(ROOT, "releases")
-WORK = os.path.join(ROOT, "work")
+S = None     # the sample set (main); its work directory is S.work
 CONTAINER = {"el8": "cmssw-el8", "slc7": "cmssw-el7"}
 
 
@@ -71,41 +74,31 @@ def run_in(release, arch, commands, cwd, env_release=True, log=None):
 
 
 def select(patterns):
-    allsamples = P.samples()
+    allsamples = S.samples
     if not patterns:
         return allsamples
     chosen = []
     for pat in patterns:
-        hits = [s for s in allsamples if s[0] == pat] or [s for s in allsamples if pat in s[0]]
+        hits = [s for s in allsamples if s.name == pat] or [s for s in allsamples if pat in s.name]
         if len(hits) != 1:
-            sys.exit(f"'{pat}' matches {len(hits)} samples: {[h[0] for h in hits]}")
+            sys.exit(f"'{pat}' matches {len(hits)} samples: {[h.name for h in hits]}")
         chosen.append(hits[0])
     return chosen
 
 
 def gen_release(chain):
-    s = P.CHAINS[chain]["steps"][0]
+    s = C.CHAINS[chain]["steps"][0]
     return s["release"], s["arch"]
 
 
-def fragment_text(point, ct, era):
-    with open(os.path.join(ROOT, "fragments", P.FRAGMENT_TEMPLATE[era])) as f:
-        t = f.read()
-    mgo, mn2, mn1 = point
-    gridpack = P.GRIDPACK_OVERRIDE.get((era, mgo))
-    if gridpack:
-        default = re.findall(r"root://\S+_tarball\.tar\.xz", t)
-        if len(default) != 1:
-            sys.exit(f"{P.FRAGMENT_TEMPLATE[era]}: expected one gridpack path, found {default}")
-        t = t.replace(default[0], gridpack)
-    for key, val in (("XXXX", str(mgo)), ("YYYY", str(mn2)), ("ZZZZ", str(mn1)), ("TTTT", "%f" % ct)):
-        t = t.replace(key, val)
-    return t
+def tools_release(chain):
+    """Release for edmProvDump / edmFileUtil on a chain's MiniAOD (13_0_13 reads 10_6 to 13_0)."""
+    return C.CHAINS[chain].get("tools_release", C.R2022_PAT)
 
 
 def step_files(chain):
     """[(n, cfg, infile, outfile)] for a chain."""
-    steps = P.CHAINS[chain]["steps"]
+    steps = C.CHAINS[chain]["steps"]
     out = []
     for i in range(1, len(steps) + 1):
         outfile = "MiniAOD.root" if i == len(steps) else f"step{i}.root"
@@ -116,18 +109,24 @@ def step_files(chain):
 
 # ----------------------------------------------------------------------------- commands
 def cmd_list(args):
-    for name, chain, point, ct, era in P.samples():
-        c = P.CHAINS[chain]
-        njobs = -(-c["total_events"] // c["events_per_job"])
-        print(f"{chain:10s} {njobs:4d} jobs  {name}")
+    print(f"sample set {S.path}: output {S.out_lfn_base}, work {S.work}")
+    for s in S.samples:
+        njobs = -(-s.total_events // C.CHAINS[s.chain]["events_per_job"])
+        print(f"{s.chain:10s} {njobs:4d} jobs  {s.name}")
 
 
 def cmd_setup(args):
     os.makedirs(RELEASES, exist_ok=True)
+    chains = args.chains or S.chains()
+    bad = [c for c in chains if c not in C.CHAINS]
+    if bad:
+        sys.exit(f"unknown chains {bad}; known: {list(C.CHAINS)}")
     releases = {}
-    for chain in P.CHAINS.values():
-        for s in chain["steps"]:
+    for c in chains:
+        for s in C.CHAINS[c]["steps"]:
             releases[s["release"]] = s["arch"]
+        rel, arch = tools_release(c)   # edmFileUtil / edmProvDump of the chain's MiniAOD (check, jobtest)
+        releases.setdefault(rel, arch)
     for rel, arch in releases.items():
         if os.path.isdir(os.path.join(RELEASES, rel)):
             print(f"{rel}: exists")
@@ -137,12 +136,14 @@ def cmd_setup(args):
             sys.exit(f"scram project {rel} failed")
     # fragments go into the GEN release of each chain, then scram b
     built = set()
-    for name, chain, point, ct, era in P.samples():
-        rel, arch = gen_release(chain)
+    for s in S.samples:
+        if s.chain not in chains:
+            continue
+        rel, arch = gen_release(s.chain)
         d = os.path.join(RELEASES, rel, "src", "Configuration", "GenProduction", "python")
         os.makedirs(d, exist_ok=True)
-        with open(os.path.join(d, P.fragment_name(point, ct, era) + ".py"), "w") as f:
-            f.write(fragment_text(point, ct, era))
+        with open(os.path.join(d, s.fragment_name + ".py"), "w") as f:
+            f.write(s.fragment_text)
         built.add((rel, arch))
     # The fragments use run_generic_tarball_xrootd.sh, which 10_6_X releases don't ship.  Add it
     # (janguian's copy, as used for the existing 2018 samples) next to the release's own
@@ -163,14 +164,14 @@ def cmd_setup(args):
 
 
 def cmd_configs(args):
-    for name, chain, point, ct, era in select(args.samples):
-        c = P.CHAINS[chain]
-        d = os.path.join(WORK, name)
+    for smp in select(args.samples):
+        c = C.CHAINS[smp.chain]
+        d = os.path.join(S.work, smp.name)
         os.makedirs(d, exist_ok=True)
-        print(f"== {name} ({chain})")
+        print(f"== {smp.name} ({smp.chain})")
         chain_lines = []
-        for (n, cfg, infile, outfile), s in zip(step_files(chain), c["steps"]):
-            a = s["args"].format(frag=P.fragment_name(point, ct, era))
+        for (n, cfg, infile, outfile), s in zip(step_files(smp.chain), c["steps"]):
+            a = s["args"].format(frag=smp.fragment_name)
             a += f" --python_filename {cfg} --fileout file:{outfile} --no_exec"
             if c.get("threads", 1) > 1:
                 a += f" --nThreads {c['threads']}"
@@ -183,11 +184,11 @@ def cmd_configs(args):
         with open(os.path.join(d, "chain.txt"), "w") as f:
             f.write("\n".join(chain_lines) + "\n")
         shutil.copy(os.path.join(ROOT, "job", "run_chain.sh"), d)
-        write_crab_config(d, name, chain, point, ct, era)
+        write_crab_config(d, smp)
 
 
 def request_name(name, pilot, recover=None):
-    return (f"{name}_{P.VERSION}" + ("_pilot" if pilot else "")
+    return (f"{name}_{S.version}" + ("_pilot" if pilot else "")
             + (f"_r{recover}" if recover else ""))
 
 
@@ -201,18 +202,18 @@ def recover_dir(d, k):
     return os.path.join(d, "recover", f"r{k}")
 
 
-def write_crab_config(d, name, chain, point, ct, era, pilot=0, recover=None):
+def write_crab_config(d, smp, pilot=0, recover=None):
     """pilot=N: only N jobs, under a separate request name and output dataset tag.
     recover={"k", "njobs", "runtime_min"}: recovery batch r<k> (see recovery.py), which ships
     recover/r<k>/recover.txt and the run_chain.sh copied next to it."""
-    c = P.CHAINS[chain]
-    # CRAB ignores the blacklist for sites matched by a whitelist wildcard (see production.py)
-    bad = [s for s in c["whitelist"] if "*" in s or s in P.SITE_BLACKLIST]
+    c = C.CHAINS[smp.chain]
+    # CRAB ignores the blacklist for sites matched by a whitelist wildcard (see chains.py)
+    bad = [s for s in c["whitelist"] if "*" in s or s in C.SITE_BLACKLIST]
     if bad:
-        sys.exit(f"{chain}: whitelist must list explicit, non-blacklisted sites; got {bad}")
-    cfgs = [cfg for n, cfg, i, o in step_files(chain)]
-    total = pilot * c["events_per_job"] if pilot else c["total_events"]
-    tag = f"{c['tag']}_{P.VERSION}" + ("_pilot" if pilot else "")
+        sys.exit(f"{smp.chain}: whitelist must list explicit, non-blacklisted sites; got {bad}")
+    cfgs = [cfg for n, cfg, i, o in step_files(smp.chain)]
+    total = pilot * c["events_per_job"] if pilot else smp.total_events
+    tag = f"{c['tag']}_{S.version}" + ("_pilot" if pilot else "")
     inputs, script, runtime, k = ["chain.txt"] + cfgs[1:], "run_chain.sh", 2000, None
     if recover:
         k = recover["k"]
@@ -225,7 +226,7 @@ def write_crab_config(d, name, chain, point, ct, era, pilot=0, recover=None):
     text = f"""from CRABClient.UserUtilities import config
 config = config()
 
-config.General.requestName = '{request_name(name, pilot, k)}'
+config.General.requestName = '{request_name(smp.name, pilot, k)}'
 config.General.workArea = 'crab_projects'
 config.General.transferOutputs = True
 config.General.transferLogs = False
@@ -241,32 +242,32 @@ config.JobType.numCores = {c.get('threads', 1)}
 config.JobType.maxMemoryMB = {c['max_memory_mb']}
 config.JobType.maxJobRuntimeMin = {runtime}
 
-config.Data.outputPrimaryDataset = '{P.sample_name(point, ct, era)}'
+config.Data.outputPrimaryDataset = '{smp.dataset}'
 config.Data.splitting = 'EventBased'
 config.Data.unitsPerJob = {c['events_per_job']}
 config.Data.totalUnits = {total}
 config.Data.publication = False
 config.Data.outputDatasetTag = '{tag}'
-config.Data.outLFNDirBase = '{P.OUT_LFN_BASE}'
+config.Data.outLFNDirBase = '{S.out_lfn_base}'
 
-config.Site.storageSite = '{P.STORAGE_SITE}'
+config.Site.storageSite = '{C.STORAGE_SITE}'
 config.Site.whitelist = {c['whitelist']!r}
-config.Site.blacklist = {P.SITE_BLACKLIST!r}
+config.Site.blacklist = {C.SITE_BLACKLIST!r}
 """
     with open(os.path.join(d, crab_config_name(pilot, k)), "w") as f:
         f.write(text)
 
 
 def cmd_test(args):
-    (name, chain, point, ct, era), = select([args.sample])
-    d = os.path.join(WORK, name)
+    smp, = select([args.sample])
+    chain, d = smp.chain, os.path.join(S.work, smp.name)
     if not os.path.exists(os.path.join(d, "chain.txt")):
         sys.exit("run ./tmc.py configs first")
     t = os.path.join(d, "test")
     shutil.rmtree(t, ignore_errors=True)
     os.makedirs(t)
     report = []
-    for (n, cfg, infile, outfile), s in zip(step_files(chain), P.CHAINS[chain]["steps"]):
+    for (n, cfg, infile, outfile), s in zip(step_files(chain), C.CHAINS[chain]["steps"]):
         shutil.copy(os.path.join(d, cfg), t)
         if n == 1:  # override the event count, as CRAB does per job
             with open(os.path.join(t, cfg), "a") as f:
@@ -287,7 +288,7 @@ def cmd_test(args):
               f"{outfile} {size / 1e6:.1f} MB")
         if rc:
             sys.exit(f"step {n} failed, see {log}")
-    nev = events_in(t, "MiniAOD.root", P.CHAINS[chain]["steps"][-1])
+    nev = events_in(t, "MiniAOD.root", C.CHAINS[chain]["steps"][-1])
     total = sum(r[3] for r in report)
     print(f"\n{args.n} LHE events -> {nev} MiniAOD events; total {total:.0f} s"
           + (f" = {total / nev:.0f} s per MiniAOD event" if nev else ""))
@@ -300,8 +301,8 @@ def cmd_jobtest(args):
     """Run job/run_chain.sh as a CRAB worker node would: only the shipped files, in a fresh
     directory, starting from the GEN release's environment (the CRAB sandbox).  Releases of later
     steps are set up from CVMFS inside the job, so this tests the release switching."""
-    (name, chain, point, ct, era), = select([args.sample])
-    d = os.path.join(WORK, name)
+    smp, = select([args.sample])
+    chain, d = smp.chain, os.path.join(S.work, smp.name)
     if not os.path.exists(os.path.join(d, "chain.txt")):
         sys.exit("run ./tmc.py configs first")
     t = os.path.join(d, "jobtest")
@@ -320,7 +321,7 @@ def cmd_jobtest(args):
         shutil.copy(os.path.join(d, fname), t)
     # the repository's run_chain.sh, i.e. what the next task (or recovery batch) will ship
     shutil.copy(os.path.join(ROOT, "job", "run_chain.sh"), t)
-    E = P.CHAINS[chain]["events_per_job"]
+    E = C.CHAINS[chain]["events_per_job"]
     if args.as_job:  # run as recovery job 1 standing in for original job N (see recovery.py)
         with open(os.path.join(t, "recover.txt"), "w") as f:
             f.write(f"1 {args.as_job} {E}\n")
@@ -345,9 +346,9 @@ def cmd_jobtest(args):
     print("leftover intermediate files:", leftover or "none")
     if rc:
         sys.exit(f"job failed, see {log}")
-    s = P.CHAINS[chain]["steps"][-1]
+    s = C.CHAINS[chain]["steps"][-1]
     print(f"{args.n} LHE events -> {events_in(t, 'MiniAOD.root', s)} MiniAOD events")
-    events = file_events(os.path.join(t, "MiniAOD.root"))
+    events = file_events(os.path.join(t, "MiniAOD.root"), chain)
     job = args.as_job or 1
     lo, hi = recovery.expected_events(job, E)
     problems = recovery.check_numbering(events, job, E)
@@ -359,12 +360,13 @@ def cmd_jobtest(args):
         sys.exit(1)
 
 
-def file_events(path):
+def file_events(path, chain=None):
     """[(run, lumi, event)] of a local file or an LFN (read over xrootd), via edmFileUtil -e."""
     url = path if os.path.exists(path) else EOS_URL + path
-    cwd = os.path.dirname(os.path.abspath(path)) if os.path.exists(path) else WORK
+    cwd = os.path.dirname(os.path.abspath(path)) if os.path.exists(path) else S.work
+    os.makedirs(cwd, exist_ok=True)
     out = os.path.join(cwd, ".events")
-    rel, arch = P.R2022_PAT
+    rel, arch = tools_release(chain) if chain else C.R2022_PAT
     run_in(rel, arch, [f"edmFileUtil -e {url} > {out} 2>&1 || true"], cwd)
     text = open(out, errors="replace").read()
     os.remove(out)
@@ -381,13 +383,14 @@ def events_in(cwd, fname, s):
 
 def cmd_check(args):
     """Compare the processing history PSetIDs of a MiniAOD file with the expected ones."""
-    expected = P.CHAINS[args.chain]["expected_psetids"]
-    rel, arch = P.R2022_PAT
-    cwd = os.path.dirname(os.path.abspath(args.file)) if not args.file.startswith("root:") else WORK
+    expected = C.CHAINS[args.chain]["expected_psetids"]
+    rel, arch = tools_release(args.chain)
+    cwd = os.path.dirname(os.path.abspath(args.file)) if not args.file.startswith("root:") else S.work
     os.makedirs(cwd, exist_ok=True)
     out = os.path.join(cwd, ".provdump")
     run_in(rel, arch, [f"edmProvDump {args.file} > {out} 2>&1 || true"], cwd)
-    hist = re.findall(r"^\s*(\w+) '' '\"(CMSSW_\w+)\"' \[\d+\]\s+\(([0-9a-f]{32})\)", open(out).read(), re.M)
+    # 13_0 edmProvDump prints  SIM '' '"CMSSW_.."' [1] (id);  15_0 drops the empty pass name ''
+    hist = re.findall(r"^\s*(\w+) (?:'' )?'\"(CMSSW_\w+)\"' \[\d+\]\s+\(([0-9a-f]{32})\)", open(out).read(), re.M)
     os.remove(out)
     if not hist:
         sys.exit("could not read the processing history")
@@ -402,11 +405,11 @@ def cmd_check(args):
 
 
 def crab_in_env(samples, crab_cmd):
-    for name, chain, point, ct, era in select(samples):
-        d = os.path.join(WORK, name)
-        rel, arch = gen_release(chain)
-        print(f"== {name}")
-        run_in(rel, arch, ["source /cvmfs/cms.cern.ch/common/crab-setup.sh", crab_cmd(d, name)], d)
+    for s in select(samples):
+        d = os.path.join(S.work, s.name)
+        rel, arch = gen_release(s.chain)
+        print(f"== {s.name}")
+        run_in(rel, arch, ["source /cvmfs/cms.cern.ch/common/crab-setup.sh", crab_cmd(d, s.name)], d)
 
 
 def cmd_submit(args):
@@ -414,11 +417,10 @@ def cmd_submit(args):
     # `./tmc.py proceed`.  The local estimate run is skipped: tmc.py test/jobtest already did it.
     extra = " --dryrun --skip-estimates" if args.dryrun else ""
     for s in select(args.samples):
-        name, chain, point, ct, era = s
-        d = os.path.join(WORK, name)
+        d = os.path.join(S.work, s.name)
         if not os.path.exists(os.path.join(d, "chain.txt")):
-            sys.exit(f"{name}: run ./tmc.py configs first")
-        write_crab_config(d, name, chain, point, ct, era, pilot=args.pilot)
+            sys.exit(f"{s.name}: run ./tmc.py configs first")
+        write_crab_config(d, s, pilot=args.pilot)
     crab_in_env(args.samples, lambda d, name: f"crab submit -c {crab_config_name(args.pilot)}{extra}")
 
 
@@ -435,7 +437,7 @@ def cmd_status(args):
 # ----------------------------------------------------------------------------- recovery
 def crab_json(d, project, cmd="status"):
     """crabCommand(cmd, dir=project) through CRABAPI, run in the 2022 GEN release (el8)."""
-    rel, arch = P.R2022_GEN
+    rel, arch = C.R2022_GEN
     out, py, log = (os.path.join(d, x) for x in (".crab.json", ".crab_json.py", ".crab_json.log"))
     with open(py, "w") as f:
         f.write("import json\nfrom CRABAPI.RawCommand import crabCommand\n"
@@ -473,19 +475,20 @@ def task_dir(lfn_base):
     return f"{lfn_base}/{stamps[0]}" if stamps else None
 
 
-def mini_lfn_base(point, ct, era, chain, k=None):
-    return (f"{P.OUT_LFN_BASE}/{P.sample_name(point, ct, era)}/{P.CHAINS[chain]['tag']}_{P.VERSION}"
+def mini_lfn_base(smp, k=None):
+    return (f"{S.out_lfn_base}/{smp.dataset}/{C.CHAINS[smp.chain]['tag']}_{S.version}"
             + (f"_r{k}" if k else ""))
 
 
 def cmd_recover(args):
     """Kill a MiniAOD task (--kill), then rerun its unfinished jobs as a recovery batch."""
-    (name, chain, point, ct, era), = select([args.sample])
-    c = P.CHAINS[chain]
+    smp, = select([args.sample])
+    name, chain = smp.name, smp.chain
+    c = C.CHAINS[chain]
     E = c["events_per_job"]
-    d = os.path.join(WORK, name)
+    d = os.path.join(S.work, name)
     orig = f"crab_projects/crab_{request_name(name, 0)}"
-    led = recovery.load(WORK, name)
+    led = recovery.load(S.work, name)
     st = crab_json(d, orig)
     jobs = st["jobs"]
     states = {}
@@ -504,11 +507,11 @@ def cmd_recover(args):
         if args.dryrun:
             print("   --dryrun: would kill the task")
             return
-        rel, arch = P.R2022_GEN
+        rel, arch = C.R2022_GEN
         if run_in(rel, arch, ["source /cvmfs/cms.cern.ch/common/crab-setup.sh", f"crab kill -d {orig}"], d):
             sys.exit("   crab kill failed")
         led["killed"] = recovery.now()
-        recovery.save(WORK, name, led)
+        recovery.save(S.work, name, led)
         print("   killed.  Run ./tmc.py recover again once crab status shows no idle or running jobs.")
         return
     active = sorted(int(j) for j, v in jobs.items() if v["State"] in recovery.ACTIVE_STATES)
@@ -527,7 +530,7 @@ def cmd_recover(args):
     if not missing:
         return
     # A file for a job CRAB doesn't count as finished: don't overwrite or duplicate it
-    base = task_dir(mini_lfn_base(point, ct, era, chain))
+    base = task_dir(mini_lfn_base(smp))
     present = {}
     for n in list(missing):
         sub = f"{base}/{n // 1000:04d}"
@@ -559,8 +562,7 @@ def cmd_recover(args):
     with open(os.path.join(rdir, "recover.txt"), "w") as f:
         f.writelines(f"{i} {n} {E}\n" for i, n in mapping.items())
     shutil.copy(os.path.join(ROOT, "job", "run_chain.sh"), rdir)
-    write_crab_config(d, name, chain, point, ct, era,
-                      recover={"k": k, "njobs": len(missing), "runtime_min": runtime})
+    write_crab_config(d, smp, recover={"k": k, "njobs": len(missing), "runtime_min": runtime})
     if args.dryrun:
         print(f"   --dryrun: wrote {crab_config_name(0, k)} and {os.path.relpath(rdir, d)}/; nothing submitted")
         return
@@ -571,25 +573,26 @@ def cmd_recover(args):
         sys.exit("   crab submit made no project directory")
     led["batches"].append({"k": k, "request": request, "map": mapping, "events_per_job": E,
                            "runtime_min": runtime, "state": "submitted", "time": recovery.now()})
-    recovery.save(WORK, name, led)
-    print(f"   submitted {request}; recorded in {os.path.relpath(recovery.ledger_path(WORK, name), ROOT)}")
+    recovery.save(S.work, name, led)
+    print(f"   submitted {request}; recorded in {os.path.relpath(recovery.ledger_path(S.work, name), ROOT)}")
 
 
 def cmd_adopt(args):
     """Move finished recovery files into the original task directory as MiniAOD_<N>.root."""
-    for name, chain, point, ct, era in select(args.samples):
-        led = recovery.load(WORK, name)
+    for smp in select(args.samples):
+        name, chain = smp.name, smp.chain
+        led = recovery.load(S.work, name)
         live = [b for b in led["batches"] if b["state"] == "submitted"]
         if not live:
             continue
-        d = os.path.join(WORK, name)
+        d = os.path.join(S.work, name)
         print(f"== {name}")
-        dst_base = task_dir(mini_lfn_base(point, ct, era, chain))
+        dst_base = task_dir(mini_lfn_base(smp))
         checked = False
         for b in live:
             k, E = b["k"], b["events_per_job"]
             jobs = crab_json(d, f"crab_projects/crab_{b['request']}")["jobs"]
-            src_base = task_dir(mini_lfn_base(point, ct, era, chain, k))
+            src_base = task_dir(mini_lfn_base(smp, k))
             waiting = {}
             for i, n in sorted(b["map"].items(), key=lambda x: int(x[0])):
                 i, n = int(i), int(n)
@@ -604,7 +607,7 @@ def cmd_adopt(args):
                 dst = f"{dst_dir}/MiniAOD_{n}.root"
                 if xrd_exists(dst):
                     sys.exit(f"   {dst} exists already: not moving {src}")
-                events = file_events(src)
+                events = file_events(src, chain)
                 problems = recovery.check_numbering(events, n, E)
                 if problems:
                     print(f"   r{k} job {i} -> {n}: NOT adopted: {'; '.join(problems)}")
@@ -618,7 +621,7 @@ def cmd_adopt(args):
                     sys.exit(f"   moving {src} -> {dst} failed: {err.strip()}")
                 led["adopted"][str(n)] = {"batch": b["request"], "job": i, "from": src, "to": dst,
                                           "events": len(events), "time": recovery.now()}
-                recovery.save(WORK, name, led)
+                recovery.save(S.work, name, led)
                 print(f"   r{k} job {i} -> MiniAOD_{n}.root: {len(events)} events, numbering OK, moved")
                 if not checked:  # provenance of the first adopted file
                     cmd_check(argparse.Namespace(file=EOS_URL + dst, chain=chain))
@@ -626,16 +629,21 @@ def cmd_adopt(args):
             left = [n for n in b["map"].values() if str(n) not in led["adopted"]]
             if not left:
                 b["state"] = "done"
-                recovery.save(WORK, name, led)
+                recovery.save(S.work, name, led)
             print(f"   r{k}: {len(b['map']) - len(left)}/{len(b['map'])} adopted"
                   + (f"; waiting {waiting}" if waiting else ""))
 
 
 def main():
+    global S
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    # dest sample_set: the subcommands' positional "samples" (name patterns) would overwrite args.samples
+    ap.add_argument("--samples", dest="sample_set", metavar="FILE",
+                    help="sample set (default: $TMC_SAMPLES, else samples/t5zg.py)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("list").set_defaults(f=cmd_list)
-    sub.add_parser("setup").set_defaults(f=cmd_setup)
+    p = sub.add_parser("setup"); p.add_argument("chains", nargs="*", help="only these chains (default: the set's)")
+    p.set_defaults(f=cmd_setup)
     p = sub.add_parser("configs"); p.add_argument("samples", nargs="*"); p.set_defaults(f=cmd_configs)
     p = sub.add_parser("test"); p.add_argument("sample"); p.add_argument("-n", type=int, default=40)
     p.set_defaults(f=cmd_test)
@@ -643,7 +651,7 @@ def main():
     p.add_argument("--as-job", type=int, default=0, metavar="N",
                    help="run as a recovery job standing in for original job N")
     p.set_defaults(f=cmd_jobtest)
-    p = sub.add_parser("check"); p.add_argument("file"); p.add_argument("chain", choices=list(P.CHAINS))
+    p = sub.add_parser("check"); p.add_argument("file"); p.add_argument("chain", choices=list(C.CHAINS))
     p.set_defaults(f=cmd_check)
     p = sub.add_parser("submit"); p.add_argument("samples", nargs="*"); p.add_argument("--dryrun", action="store_true")
     p.add_argument("--pilot", type=int, default=0, metavar="N", help="submit only N jobs as a separate pilot task")
@@ -660,6 +668,7 @@ def main():
     p.add_argument("--dryrun", action="store_true", help="check the files, move nothing")
     p.set_defaults(f=cmd_adopt)
     args = ap.parse_args()
+    S = sampleset.load(args.sample_set)
     args.f(args)
 
 

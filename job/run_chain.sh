@@ -62,7 +62,8 @@ done
 
 t0=$(stamp)
 echo "=== step 1 (PSet.py, ${CMSSW_VERSION}) starting at $(date)"
-cmsRun -j FrameworkJobReport.xml -p PSet.py
+# positional config: cmsRun of CMSSW_14_0 and later no longer has -p (10_6 - 13_0 accept both)
+cmsRun -j FrameworkJobReport.xml PSet.py
 rc=$?
 echo "=== step 1 exit ${rc} after $(( $(stamp) - t0 )) s"
 [ ${rc} -ne 0 ] && exit ${rc}
